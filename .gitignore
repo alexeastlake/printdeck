@@ -1,0 +1,16 @@
+# Real LAN layout / per-machine config — keep it off GitHub
+printers.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

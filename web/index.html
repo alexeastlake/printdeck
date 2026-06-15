@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrintDeck</title>
+  <!-- Inline favicon (stacked print layers) — no separate file, no /favicon.ico 404. -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233a6ea5'/%3E%3Crect x='8' y='9' width='16' height='3.2' rx='1.6' fill='white'/%3E%3Crect x='8' y='14.4' width='16' height='3.2' rx='1.6' fill='white'/%3E%3Crect x='8' y='19.8' width='16' height='3.2' rx='1.6' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>PrintDeck</h1>
+    <span id="conn" class="conn" data-state="connecting">connecting…</span>
+  </header>
+
+  <main>
+    <section id="fleet" class="fleet" aria-live="polite"></section>
+    <p id="empty" class="empty" hidden>
+      No printers configured yet. Add one to <code>printers.yaml</code> and restart.
+    </p>
+  </main>
+
+  <!-- A card is cloned from this template per printer. -->
+  <template id="card-template">
+    <article class="card">
+      <header class="card-head">
+        <h2 class="name"></h2>
+        <span class="badge"></span>
+      </header>
+
+      <div class="temps">
+        <div class="temp">
+          <span class="temp-label">Nozzle</span>
+          <span class="temp-value nozzle"></span>
+        </div>
+        <div class="temp">
+          <span class="temp-label">Bed</span>
+          <span class="temp-value bed"></span>
+        </div>
+      </div>
+
+      <div class="job" hidden>
+        <div class="progress"><div class="progress-bar"></div></div>
+        <div class="job-meta">
+          <span class="filename"></span>
+          <span class="eta"></span>
+        </div>
+      </div>
+
+      <button class="cam-toggle" type="button" hidden>Show camera</button>
+      <div class="camera" hidden>
+        <video class="cam-frame" title="Printer camera — click for fullscreen"
+               muted autoplay playsinline></video>
+      </div>
+    </article>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>

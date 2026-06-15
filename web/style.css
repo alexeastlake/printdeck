@@ -1,0 +1,206 @@
+/* PrintDeck — restrained, hand-tuned. Light by default, gentle dark mode.
+   No framework; just a small set of variables and a handful of components. */
+
+:root {
+  --bg: #f6f5f2;
+  --surface: #ffffff;
+  --ink: #1d1f21;
+  --ink-soft: #6b6f73;
+  --line: #e4e2dd;
+  --accent: #3a6ea5;
+
+  /* status colours, kept muted on purpose */
+  --idle: #8a8f94;
+  --printing: #2f8f6b;
+  --paused: #c08a2d;
+  --error: #b4564f;
+  --offline: #b8b6b1;
+
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .05), 0 4px 12px rgba(0, 0, 0, .04);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181a;
+    --surface: #1f2225;
+    --ink: #e8e7e3;
+    --ink-soft: #9aa0a6;
+    --line: #2c2f33;
+    --accent: #6ea0d6;
+    --offline: #54585c;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 14px rgba(0, 0, 0, .25);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  line-height: 1.45;
+}
+
+.topbar {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+
+.conn {
+  font-size: .8rem;
+  color: var(--ink-soft);
+}
+.conn::before {
+  content: "";
+  display: inline-block;
+  width: .5rem;
+  height: .5rem;
+  margin-right: .4rem;
+  border-radius: 50%;
+  background: var(--idle);
+  vertical-align: middle;
+}
+.conn[data-state="open"]::before { background: var(--printing); }
+.conn[data-state="closed"]::before,
+.conn[data-state="connecting"]::before { background: var(--paused); }
+
+main { padding: 1.5rem; }
+
+.fleet {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1.25rem;
+  max-width: 1100px;
+}
+
+.empty {
+  color: var(--ink-soft);
+  max-width: 1100px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.1rem 1.2rem 1.2rem;
+}
+/* a quiet left edge that picks up the printer's state colour */
+.card { border-left: 3px solid var(--state, var(--offline)); }
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  margin-bottom: .9rem;
+}
+
+.name {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.badge {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--surface);
+  background: var(--state, var(--offline));
+  padding: .15rem .5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.temps {
+  display: flex;
+  gap: 1.5rem;
+}
+
+.temp { display: flex; flex-direction: column; }
+.temp-label {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ink-soft);
+}
+.temp-value {
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+}
+.temp-value .target { font-size: .85rem; color: var(--ink-soft); }
+
+.job { margin-top: 1rem; }
+
+.progress {
+  height: 6px;
+  background: var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  width: 0;
+  background: var(--state, var(--printing));
+  transition: width .4s ease;
+}
+
+.job-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: .75rem;
+  margin-top: .5rem;
+  font-size: .8rem;
+  color: var(--ink-soft);
+}
+.filename {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.eta { white-space: nowrap; }
+
+.cam-toggle {
+  margin-top: 1rem;
+  font: inherit;
+  font-size: .8rem;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.cam-toggle:hover { text-decoration: underline; }
+
+.camera { margin-top: .9rem; }
+.cam-frame {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #000;
+  /* Preview: fill the tile, cropping as needed. */
+  object-fit: cover;
+  cursor: zoom-in;
+}
+/* Fullscreen: show the whole frame, letterboxed, not cropped. */
+.cam-frame:fullscreen {
+  border: none;
+  border-radius: 0;
+  object-fit: contain;
+  cursor: default;
+}

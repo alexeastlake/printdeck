@@ -1,0 +1,19 @@
+# Copy this to printers.yaml and put in your real printer details.
+# printers.yaml is gitignored so your LAN layout never gets committed.
+#
+# Finding your K1C's IP: check your router's DHCP client list, or look on the
+# printer screen under Settings > Network. A DHCP reservation (static lease) is
+# strongly recommended so the address doesn't change — see the README.
+
+printers:
+  - id: k1c                      # short, unique, url-safe
+    name: "Creality K1C 2025"
+    host: 192.168.1.50           # <-- your printer's IP
+    moonraker_port: 7125         # Moonraker default; correct for the K1C 2025
+    camera_url: "http://192.168.1.50:8000/"   # WebRTC camera page; null to hide
+
+  # Add more printers later — the dashboard handles however many you list:
+  # - id: ender
+  #   name: "Ender 3 (Klipper)"
+  #   host: 192.168.1.60
+  #   camera_url: null
