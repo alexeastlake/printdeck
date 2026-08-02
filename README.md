@@ -43,14 +43,13 @@ and password in the environment before starting:
 ```powershell
 $env:PRINTDECK_USERNAME = "you"
 $env:PRINTDECK_PASSWORD = "a-good-password"
-$env:PRINTDECK_SECRET   = "a-long-random-string"   # optional; signs the cookie
 uvicorn app.main:app --reload
 ```
 
 With those set, every page, API call, and the live WebSocket require a login;
 unauthenticated visitors get bounced to a sign-in page, and there's a **Sign
-out** button in the header. `PRINTDECK_SECRET` is optional — without it sessions
-just don't survive a server restart.
+out** button in the header. Logins reset when the server restarts (the cookie
+signing key is regenerated each start) — fine for a personal dashboard.
 
 Two caveats worth knowing:
 

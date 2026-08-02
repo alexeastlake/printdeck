@@ -2,12 +2,11 @@
 
 Auth turns on when both PRINTDECK_USERNAME and PRINTDECK_PASSWORD are set in the
 environment. When they aren't, the dashboard stays open (handy for local dev)
-and we log a loud warning. Login issues a signed session cookie (via Starlette's
-SessionMiddleware); PRINTDECK_SECRET signs it — if unset we generate a random
-key per run, which just means logins don't survive a restart.
+and we log a loud warning. Login issues a signed session cookie; the signing key
+is generated fresh each start, so logins reset when the server restarts.
 
-The secret never lives in the repo: it comes from the environment, so a public
-clone ships no credentials.
+Credentials never live in the repo — they come from the environment, so a public
+clone ships nothing secret.
 """
 
 from __future__ import annotations
@@ -24,20 +23,15 @@ log = logging.getLogger("printdeck.auth")
 
 USERNAME = os.environ.get("PRINTDECK_USERNAME", "")
 PASSWORD = os.environ.get("PRINTDECK_PASSWORD", "")
-SECRET = os.environ.get("PRINTDECK_SECRET") or secrets.token_urlsafe(32)
+# Session-cookie signing key, regenerated each start (so logins reset on restart).
+SECRET = secrets.token_urlsafe(32)
 
 
 def auth_enabled() -> bool:
     return bool(USERNAME and PASSWORD)
 
 
-if auth_enabled():
-    if not os.environ.get("PRINTDECK_SECRET"):
-        log.warning(
-            "PRINTDECK_SECRET is unset — signing sessions with a random key, "
-            "so everyone is logged out when the server restarts."
-        )
-else:
+if not auth_enabled():
     log.warning(
         "AUTH DISABLED — set PRINTDECK_USERNAME and PRINTDECK_PASSWORD to require "
         "a login. Right now anyone who can reach this server sees your printers."
