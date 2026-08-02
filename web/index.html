@@ -12,6 +12,7 @@
   <header class="topbar">
     <h1>PrintDeck</h1>
     <span id="conn" class="conn" data-state="connecting">connecting…</span>
+    <button id="logout" class="logout" type="button" hidden>Sign out</button>
   </header>
 
   <main>
@@ -26,8 +27,31 @@
     <article class="card">
       <header class="card-head">
         <h2 class="name"></h2>
-        <span class="badge"></span>
+        <div class="head-right">
+          <span class="badge"></span>
+          <button class="edit-toggle" type="button" title="Edit IP address"
+                  aria-label="Edit IP address">⚙</button>
+        </div>
       </header>
+
+      <form class="editor" hidden>
+        <p class="editor-title">Printer settings</p>
+        <label class="editor-field">
+          <span>Name</span>
+          <input class="name-input" type="text" autocomplete="off"
+                 placeholder="Creality K1C">
+        </label>
+        <label class="editor-field">
+          <span>IP / hostname</span>
+          <input class="host-input" type="text" inputmode="decimal"
+                 autocomplete="off" spellcheck="false" placeholder="192.168.1.50">
+        </label>
+        <div class="editor-actions">
+          <button type="submit" class="btn-save">Save</button>
+          <button type="button" class="btn-cancel">Cancel</button>
+        </div>
+        <p class="editor-error" role="alert" hidden></p>
+      </form>
 
       <div class="temps">
         <div class="temp">

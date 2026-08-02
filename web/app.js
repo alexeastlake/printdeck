@@ -43,12 +43,14 @@ function cardFor(id) {
     if (video.srcObject && document.fullscreenEnabled) video.requestFullscreen();
   });
 
+  wireEditor(card, id);
   return card;
 }
 
 function render(status) {
   emptyNote.hidden = true;
   const card = cardFor(status.id);
+  card.dataset.host = status.host || "";  // prefill for the IP editor
   card.style.setProperty("--state", STATE_COLOR[status.state] || STATE_COLOR.offline);
 
   card.querySelector(".name").textContent = status.name;
@@ -85,6 +87,58 @@ function renderCamera(card, status) {
     toggle.textContent = "Show camera";
     stopCamera(card);
   }
+}
+
+// --- editing a printer's IP ------------------------------------------------
+// DHCP can move the printer's address; let the user repoint it from the card
+// and reconnect live, no server restart.
+
+function wireEditor(card, id) {
+  const editor = card.querySelector(".editor");
+  const nameInput = card.querySelector(".name-input");
+  const hostInput = card.querySelector(".host-input");
+  const error = card.querySelector(".editor-error");
+  const saveBtn = card.querySelector(".btn-save");
+
+  card.querySelector(".edit-toggle").addEventListener("click", () => {
+    const opening = editor.hidden;
+    editor.hidden = !opening;
+    if (opening) {
+      error.hidden = true;
+      nameInput.value = card.querySelector(".name").textContent || "";
+      hostInput.value = card.dataset.host || "";
+    }
+  });
+
+  card.querySelector(".btn-cancel").addEventListener("click", () => {
+    editor.hidden = true;
+  });
+
+  editor.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    error.hidden = true;
+    saveBtn.disabled = true;
+    try {
+      const res = await fetch(`/api/printers/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: nameInput.value.trim(),
+          host: hostInput.value.trim(),
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `error ${res.status}`);
+      }
+      editor.hidden = true;  // success — the live feed repaints the card
+    } catch (err) {
+      error.textContent = err.message;
+      error.hidden = false;
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
 }
 
 // --- camera (WebRTC) -------------------------------------------------------
@@ -193,6 +247,7 @@ function startPolling() {
   const tick = async () => {
     try {
       const res = await fetch("/api/printers");
+      if (res.status === 401) return void (location.href = "/login");  // session expired
       (await res.json()).forEach(render);
     } catch { /* still offline; the next tick will try again */ }
   };
@@ -210,4 +265,24 @@ function setConn(state, label) {
   connLabel.textContent = label;
 }
 
+// --- session / sign out ----------------------------------------------------
+
+const logoutBtn = document.getElementById("logout");
+
+logoutBtn.addEventListener("click", async () => {
+  try { await fetch("/auth/logout", { method: "POST" }); } catch { /* ignore */ }
+  location.href = "/login";
+});
+
+async function setupSession() {
+  try {
+    const { enabled, user } = await (await fetch("/api/session")).json();
+    if (enabled) {
+      logoutBtn.hidden = false;
+      if (user) logoutBtn.title = `Signed in as ${user}`;
+    }
+  } catch { /* auth probe failed; the dashboard still works */ }
+}
+
+setupSession();
 connect();

@@ -1,6 +1,10 @@
 # Real LAN layout / per-machine config — keep it off GitHub
 printers.yaml
 
+# Secrets (auth credentials) — never commit these
+.env
+printdeck.env
+
 # Python
 __pycache__/
 *.py[cod]

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrintDeck — Sign in</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233a6ea5'/%3E%3Crect x='8' y='9' width='16' height='3.2' rx='1.6' fill='white'/%3E%3Crect x='8' y='14.4' width='16' height='3.2' rx='1.6' fill='white'/%3E%3Crect x='8' y='19.8' width='16' height='3.2' rx='1.6' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="login-body">
+  <form id="login" class="login-card">
+    <h1 class="login-title">PrintDeck</h1>
+    <p class="login-sub">Sign in to view your printers</p>
+
+    <label class="login-field">
+      <span>Username</span>
+      <input name="username" autocomplete="username" autofocus required>
+    </label>
+    <label class="login-field">
+      <span>Password</span>
+      <input name="password" type="password" autocomplete="current-password" required>
+    </label>
+
+    <button type="submit" class="login-btn">Sign in</button>
+    <p class="login-error" role="alert" hidden></p>
+  </form>
+
+  <script>
+    const form = document.getElementById("login");
+    const error = form.querySelector(".login-error");
+    const button = form.querySelector(".login-btn");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      error.hidden = true;
+      button.disabled = true;
+      try {
+        const res = await fetch("/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: form.username.value,
+            password: form.password.value,
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.detail || "Sign in failed.");
+        }
+        location.href = "/";
+      } catch (err) {
+        error.textContent = err.message;
+        error.hidden = false;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

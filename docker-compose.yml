@@ -1,0 +1,19 @@
+# PrintDeck for a homelab. Bring it up with:  docker compose up -d --build
+services:
+  printdeck:
+    build: .
+    container_name: printdeck
+    ports:
+      - "8000:8000"
+    # Credentials come from a .env file next to this one (copy .env.example).
+    # Leave them blank to run with no login (the app logs a warning).
+    environment:
+      - PRINTDECK_USERNAME=${PRINTDECK_USERNAME:-}
+      - PRINTDECK_PASSWORD=${PRINTDECK_PASSWORD:-}
+      - PRINTDECK_SECRET=${PRINTDECK_SECRET:-}
+    # The app *writes* printers.yaml when you edit a printer in the UI, so mount
+    # it from the host to keep those edits across container rebuilds. The file
+    # must already exist on the host (cp printers.example.yaml printers.yaml).
+    volumes:
+      - ./printers.yaml:/app/printers.yaml
+    restart: unless-stopped

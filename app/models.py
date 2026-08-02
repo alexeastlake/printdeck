@@ -25,6 +25,7 @@ class PrinterStatus(BaseModel):
 
     id: str
     name: str
+    host: str = ""  # current IP/hostname, so the UI can show & edit it
     online: bool = False
     # one of: idle, printing, paused, error, offline
     state: str = "offline"

@@ -6,17 +6,14 @@ A dashboard for Moonraker-based 3D printers.
 
 ```
 app/                 FastAPI backend
-  main.py            app entry; serves the API and the web/ page from one process
-  config.py          reads printers.yaml
+  main.py            app entry; wires everything up, serves the API + web/ page
+  config.py          reads/writes printers.yaml
   models.py          PrinterConfig + the flat PrinterStatus sent to the browser
-  moonraker/         the printer-facing half
-    client.py        one Moonraker websocket connection, subscribe + merge updates
-    normalize.py     raw Moonraker objects -> PrinterStatus
-    manager.py       one task per printer, reconnects, fans status out to the page
-  api/               printers.py (REST) + stream.py (/ws live channel)
-                     + camera.py (WebRTC signaling proxy for the camera)
+  moonraker.py       the printer-facing half: connect, normalize, one task each
+  routes.py          the endpoints: printer REST, camera signaling, /ws live feed
+  auth.py            optional username/password login (see below)
 web/                 the entire frontend, hand-written, no build step
-  index.html  style.css  app.js
+  index.html  style.css  app.js  login.html
 printers.yaml        your printers (gitignored; copy from printers.example.yaml)
 ```
 
@@ -36,6 +33,56 @@ uvicorn app.main:app --reload
 ```
 
 Open <http://localhost:8000>.
+
+## Authentication
+
+By default the dashboard is **open** — anyone who can reach the server sees your
+printers (it logs a warning to remind you). To require a login, set a username
+and password in the environment before starting:
+
+```powershell
+$env:PRINTDECK_USERNAME = "you"
+$env:PRINTDECK_PASSWORD = "a-good-password"
+$env:PRINTDECK_SECRET   = "a-long-random-string"   # optional; signs the cookie
+uvicorn app.main:app --reload
+```
+
+With those set, every page, API call, and the live WebSocket require a login;
+unauthenticated visitors get bounced to a sign-in page, and there's a **Sign
+out** button in the header. `PRINTDECK_SECRET` is optional — without it sessions
+just don't survive a server restart.
+
+Two caveats worth knowing:
+
+- This runs over **plain HTTP**, so credentials are visible to anyone sniffing
+  your LAN. That's fine for keeping casual devices out at home; put it behind
+  **HTTPS** (a reverse proxy) before exposing it any wider.
+- The login gates *this dashboard*. The camera stream comes peer-to-peer from
+  the printer's own server on `:8000`, which has no auth of its own — anyone who
+  knows the printer's IP can still reach that directly.
+
+## Run it with Docker
+
+The whole app is one process, so the container is tiny. On your homelab:
+
+```bash
+git clone <your-repo-url> printdeck && cd printdeck
+
+cp printers.example.yaml printers.yaml   # edit the printer IP inside
+cp .env.example .env                      # set username/password/secret (or leave blank)
+
+docker compose up -d --build
+```
+
+Then open `http://<homelab-ip>:8000`. A few notes:
+
+- **Your printer edits persist.** `printers.yaml` is mounted from the host, so
+  changing a printer's IP or name in the UI writes back to the file and survives
+  rebuilds. (The file must exist before you start — hence the `cp` above.)
+- **Credentials** come from `.env` (gitignored). Blank = no login, with a warning.
+- **Camera still works** — it streams peer-to-peer from the printer straight to
+  your browser, so it doesn't route through the container.
+- **Updating** as we keep building: `git pull && docker compose up -d --build`.
 
 ## Finding your printer's IP
 
@@ -64,9 +111,14 @@ printer as *offline* and keeps retrying - update the IP and it reconnects.
   handshake - the video never passes through this process.
 - **More printers:** just add entries to `printers.yaml`. The dashboard renders
   one card per printer automatically.
-- **Homelab:** it's a single process, so deployment is a small Dockerfile (TODO)
-  or just running `uvicorn` behind your reverse proxy. Add auth before exposing
-  it beyond your LAN.
+- **Editing a printer:** the ⚙ on each card edits its name and IP/hostname,
+  reconnects that printer live (no server restart), and saves to `printers.yaml`.
+  Handy when a roaming DHCP address moves.
+- **Auto-discovery (TODO):** find the printer on the LAN automatically via
+  mDNS/hostname, so a roaming DHCP address updates itself instead of needing the
+  new IP typed into the ⚙ settings. Would remove the manual lookup step entirely.
+- **Homelab:** it's a single process — run it with Docker (see below) or just
+  `uvicorn` behind your reverse proxy. Add auth before exposing it beyond your LAN.
 - **Deferred features** (already has a home in the structure): pause/resume/
   cancel + temperature/G-code controls, browser file upload + start print, and
   job history.
