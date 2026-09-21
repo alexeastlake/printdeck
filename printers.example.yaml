@@ -11,9 +11,13 @@ printers:
     host: 192.168.1.50           # <-- your printer's IP
     moonraker_port: 7125         # Moonraker default; correct for the K1C 2025
     camera_url: "http://192.168.1.50:8000/"   # WebRTC camera page; null to hide
+    group: "Home"              # optional; printers sharing a group sit in one
+                                  # collapsible section on the dashboard. Leave
+                                  # blank (or omit) to land in "Ungrouped".
 
   # Add more printers later — the dashboard handles however many you list:
   # - id: ender
   #   name: "Ender 3 (Klipper)"
   #   host: 192.168.1.60
   #   camera_url: null
+  #   group: "Garage"

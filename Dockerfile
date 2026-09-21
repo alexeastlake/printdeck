@@ -10,6 +10,10 @@ WORKDIR /app
 COPY . .
 RUN pip install --no-cache-dir -e .
 
+# Drop root once install is done — the process itself doesn't need it.
+RUN useradd --create-home --uid 1000 printdeck && chown -R printdeck:printdeck /app
+USER printdeck
+
 EXPOSE 8000
 
 # Bind to all interfaces so it's reachable from other devices on your LAN.

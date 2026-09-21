@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script>try{var t=localStorage.getItem("printdeck-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}</script>
+  <title>PrintDeck</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233a6ea5'/%3E%3Crect x='8' y='9' width='16' height='3.2' rx='1.6' fill='white'/%3E%3Crect x='8' y='14.4' width='16' height='3.2' rx='1.6' fill='white'/%3E%3Crect x='8' y='19.8' width='16' height='3.2' rx='1.6' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1><a href="/">PrintDeck</a></h1>
+    <span id="conn" class="conn" data-state="connecting">Connecting to server…</span>
+    <div class="header-actions">
+      <div class="dropdown">
+        <button id="settings-toggle" class="icon-btn" type="button"
+                aria-haspopup="true" aria-expanded="false"
+                title="Settings" aria-label="Settings">⚙</button>
+      </div>
+      <div class="dropdown">
+        <button id="account-toggle" class="icon-btn account-toggle" type="button" hidden
+                aria-haspopup="true" aria-expanded="false"
+                title="Account" aria-label="Account"></button>
+      </div>
+    </div>
+  </header>
+
+  <main class="detail-main">
+    <article id="detail-card" class="detail-page" hidden>
+      <div class="detail-head">
+        <div class="detail-title">
+          <span class="state-dot"></span>
+          <h2><span class="name"></span></h2>
+          <span class="badge"></span>
+        </div>
+        <button class="edit-toggle" type="button" title="Edit printer settings"
+                aria-label="Edit printer settings">⚙</button>
+      </div>
+
+      <p class="klipper-status" hidden><span class="klipper-status-label">Status</span> <span class="klipper-status-value"></span></p>
+
+      <div class="printer-info">
+        <span class="printer-info-item">IP/hostname <b class="printer-info-host"></b></span>
+      </div>
+
+      <form class="editor" hidden autocomplete="off">
+        <p class="editor-title">Printer settings</p>
+        <label class="editor-field">
+          <span>Name</span>
+          <input class="name-input" type="text" autocomplete="off" placeholder="Creality K1C">
+        </label>
+        <label class="editor-field">
+          <span>IP/hostname</span>
+          <input class="host-input" type="text" inputmode="decimal" autocomplete="off"
+                 spellcheck="false" placeholder="192.168.1.50">
+        </label>
+        <label class="editor-field">
+          <span>Camera URL</span>
+          <input class="camera-url-input" type="text" autocomplete="off"
+                 spellcheck="false" placeholder="http://192.168.1.50:8000">
+        </label>
+        <label class="editor-field">
+          <span>Group</span>
+          <input class="group-input" type="text" autocomplete="off" placeholder="Garage">
+        </label>
+        <div class="editor-actions">
+          <button type="submit" class="btn-save">Save</button>
+          <button type="button" class="btn-cancel">Cancel</button>
+          <button type="button" class="btn-delete-printer">Remove printer</button>
+        </div>
+        <p class="editor-error" role="alert" hidden></p>
+      </form>
+
+      <div class="temps">
+        <div class="temp">
+          <span class="temp-label">Nozzle</span>
+          <span class="temp-value nozzle"></span>
+        </div>
+        <div class="temp">
+          <span class="temp-label">Bed</span>
+          <span class="temp-value bed"></span>
+        </div>
+      </div>
+
+      <div class="job" hidden>
+        <div class="job-top">
+          <img class="job-thumb" alt="" hidden>
+          <div class="job-info">
+            <div class="progress"><div class="progress-bar"></div></div>
+            <div class="job-meta">
+              <span class="filename"></span>
+              <span class="eta"></span>
+            </div>
+            <div class="job-stats">
+              <span class="job-stat job-stat-filament" hidden>Filament Length <b class="job-filament"></b></span>
+              <span class="job-stat job-stat-weight" hidden>Filament Weight <b class="job-weight"></b></span>
+              <span class="job-stat job-stat-filament-type" hidden>Filament Type <b class="job-filament-type"></b></span>
+              <span class="job-stat job-stat-layer-count" hidden>Layer Count <b class="job-layer-count"></b></span>
+              <span class="job-stat job-stat-layer-height" hidden>Layer Height <b class="job-layer-height"></b></span>
+              <span class="job-stat job-stat-nozzle" hidden>Nozzle <b class="job-nozzle"></b></span>
+              <span class="job-stat job-stat-slicer" hidden>Sliced With <b class="job-slicer"></b></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p class="detail-message" hidden></p>
+
+      <div class="camera detail-camera" hidden>
+        <video class="cam-frame" title="Printer camera — click for fullscreen"
+               muted autoplay playsinline></video>
+        <p class="cam-status" role="status" hidden></p>
+      </div>
+      <p class="printer-info-item printer-info-camera-item" hidden>Camera URL <b class="printer-info-camera"></b></p>
+
+      <!-- Direct printer control: heaters, fan, toolhead jog. Sends G-code
+           through the relay in app/routes.py. Each block's own recent
+           history sits right below it. Three blocks side by side on a wide
+           screen, stacking on narrow ones. -->
+      <section class="controls-section" hidden>
+        <h3>Controls</h3>
+
+        <div class="controls-grid">
+          <div class="control-block temp-block">
+            <div class="graph-block">
+              <div class="graph-legend">
+                <div class="legend-row">
+                  <span class="legend-item"><span class="legend-swatch swatch-extruder"></span>Nozzle <b class="legend-value extruder-value"></b></span>
+                  <span class="legend-item"><span class="legend-swatch swatch-bed"></span>Bed <b class="legend-value bed-value"></b></span>
+                </div>
+                <div class="legend-row legend-style-row">
+                  <span class="legend-item"><span class="legend-sample legend-sample-solid"></span>Actual</span>
+                  <span class="legend-item"><span class="legend-sample legend-sample-dashed"></span>Target</span>
+                </div>
+              </div>
+              <div class="graph-frame">
+                <div class="graph-y-labels">
+                  <span class="graph-y-max temp-y-max"></span>
+                  <span class="graph-y-mid temp-y-mid"></span>
+                  <span class="graph-y-min">0°</span>
+                </div>
+                <div class="graph-plot">
+                  <svg class="graph-svg temp-graph" viewBox="0 0 600 140" preserveAspectRatio="none"></svg>
+                  <div class="graph-x-axis">
+                    <span class="graph-x-start">−10m</span>
+                    <span class="graph-x-mid">−5m</span>
+                    <span class="graph-x-end">now</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="control-row temp-row">
+              <span class="control-label">Nozzle</span>
+              <input class="extruder-target-input" type="number" min="0" max="300" step="1" inputmode="numeric" autocomplete="off">
+              <span class="control-unit">°C</span>
+              <div class="control-buttons">
+                <button class="extruder-set-btn" type="button">Set</button>
+                <button class="extruder-off-btn" type="button">Off</button>
+              </div>
+            </div>
+            <div class="control-row temp-row">
+              <span class="control-label">Bed</span>
+              <input class="bed-target-input" type="number" min="0" max="130" step="1" inputmode="numeric" autocomplete="off">
+              <span class="control-unit">°C</span>
+              <div class="control-buttons">
+                <button class="bed-set-btn" type="button">Set</button>
+                <button class="bed-off-btn" type="button">Off</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- One row per fan Klipper actually has configured — printers
+               often have more than the single part-cooling fan, and there's
+               no fixed list of names, so this is built from whatever the
+               live status reports (see detail.js). -->
+          <div class="control-block fan-block">
+            <div class="graph-block">
+              <div class="graph-legend fan-legend"></div>
+              <div class="graph-frame">
+                <div class="graph-y-labels">
+                  <span class="graph-y-max">100%</span>
+                  <span class="graph-y-mid">50%</span>
+                  <span class="graph-y-min">0%</span>
+                </div>
+                <div class="graph-plot">
+                  <svg class="graph-svg fan-graph" viewBox="0 0 600 140" preserveAspectRatio="none"></svg>
+                  <div class="graph-x-axis">
+                    <span class="graph-x-start">−10m</span>
+                    <span class="graph-x-mid">−5m</span>
+                    <span class="graph-x-end">now</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="fan-rows"></div>
+          </div>
+
+          <div class="control-block move-block">
+            <div class="move-head">
+              <span class="position-readout">
+                <span class="position-item">X <b class="pos-x">—</b></span>
+                <span class="position-item">Y <b class="pos-y">—</b></span>
+                <span class="position-item">Z <b class="pos-z">—</b></span>
+              </span>
+              <div class="step-picker" role="radiogroup" aria-label="Move step size">
+                <button type="button" class="step-btn" data-step="0.1">0.1</button>
+                <button type="button" class="step-btn active" data-step="1">1</button>
+                <button type="button" class="step-btn" data-step="10">10</button>
+                <button type="button" class="step-btn" data-step="50">50</button>
+                <span class="step-unit">mm</span>
+              </div>
+            </div>
+            <div class="move-pads">
+              <div class="jog-pad">
+                <span></span>
+                <button type="button" class="jog-btn" data-axis="Y" data-dir="1">Y+</button>
+                <span></span>
+                <button type="button" class="jog-btn" data-axis="X" data-dir="-1">X-</button>
+                <button type="button" class="jog-home" data-home="all" title="Home all axes" aria-label="Home all axes">⌂</button>
+                <button type="button" class="jog-btn" data-axis="X" data-dir="1">X+</button>
+                <span></span>
+                <button type="button" class="jog-btn" data-axis="Y" data-dir="-1">Y-</button>
+                <span></span>
+              </div>
+              <div class="jog-z">
+                <button type="button" class="jog-btn" data-axis="Z" data-dir="1" title="Move nozzle away from bed">Z+</button>
+                <button type="button" class="jog-btn" data-axis="Z" data-dir="-1" title="Move nozzle toward bed">Z-</button>
+              </div>
+            </div>
+            <p class="move-disabled-note" hidden></p>
+          </div>
+        </div>
+
+        <p class="controls-status" hidden></p>
+      </section>
+    </article>
+
+    <!-- Browse (and manage) the printer's own gcode files. No print-job
+         controls here — this is just the filesystem. -->
+    <section class="files-section" hidden>
+      <div class="files-head">
+        <h3>Files</h3>
+        <div class="files-controls">
+          <input class="files-search" type="search" placeholder="Search this folder…"
+                 aria-label="Search files" autocomplete="off">
+          <button class="files-new-folder" type="button">New folder</button>
+          <button class="files-upload" type="button">Upload</button>
+          <input class="files-upload-input" type="file" hidden>
+          <button class="files-refresh icon-btn" type="button" title="Refresh" aria-label="Refresh">⟳</button>
+        </div>
+      </div>
+      <nav class="files-breadcrumb" aria-label="Folder path"></nav>
+
+      <div class="files-bulk-bar" hidden>
+        <span class="files-bulk-count"></span>
+        <button type="button" class="files-bulk-delete">Delete selected</button>
+      </div>
+
+      <div class="files-table">
+        <div class="files-table-head">
+          <span class="files-col-check">
+            <input type="checkbox" class="files-select-all" aria-label="Select all">
+          </span>
+          <button type="button" class="files-sort-btn" data-sort="name">Name</button>
+          <button type="button" class="files-sort-btn" data-sort="size">Size</button>
+          <button type="button" class="files-sort-btn" data-sort="modified">Modified</button>
+          <span></span>
+        </div>
+        <ul class="files-list"></ul>
+      </div>
+      <button class="files-load-more" type="button" hidden>Load more</button>
+      <p class="files-status" hidden></p>
+    </section>
+
+    <p id="not-found" class="not-found" hidden>
+      Can't find that printer — it may have been removed. <a href="/">Back to the dashboard</a>.
+    </p>
+  </main>
+
+  <!-- One of these per fan reported in the live status — see detail.js. -->
+  <template id="fan-row-template">
+    <div class="control-row fan-row">
+      <span class="control-label"></span>
+      <input type="number" min="0" max="100" step="1" inputmode="numeric" class="fan-target-input" autocomplete="off">
+      <span class="control-unit">%</span>
+      <div class="control-buttons">
+        <button type="button" class="fan-set-btn">Set</button>
+        <button type="button" class="fan-off-btn">Off</button>
+      </div>
+    </div>
+  </template>
+
+  <script src="/shared.js"></script>
+  <script src="/detail.js"></script>
+</body>
+</html>

@@ -12,6 +12,7 @@ __pycache__/
 .env
 printdeck.env
 printers.yaml
+users.yaml
 
 # Editor / OS cruft
 .vscode/

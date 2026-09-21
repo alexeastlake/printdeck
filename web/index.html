@@ -3,22 +3,42 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Applied before first paint so there's no flash of the wrong theme;
+       see shared.js for what sets/reads this. -->
+  <script>try{var t=localStorage.getItem("printdeck-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}</script>
   <title>PrintDeck</title>
   <!-- Inline favicon (stacked print layers) — no separate file, no /favicon.ico 404. -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233a6ea5'/%3E%3Crect x='8' y='9' width='16' height='3.2' rx='1.6' fill='white'/%3E%3Crect x='8' y='14.4' width='16' height='3.2' rx='1.6' fill='white'/%3E%3Crect x='8' y='19.8' width='16' height='3.2' rx='1.6' fill='white'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header class="topbar">
-    <h1>PrintDeck</h1>
-    <span id="conn" class="conn" data-state="connecting">connecting…</span>
-    <button id="logout" class="logout" type="button" hidden>Sign out</button>
+    <h1><a href="/">PrintDeck</a></h1>
+    <span id="conn" class="conn" data-state="connecting">Connecting to server…</span>
+    <div class="header-actions">
+      <button id="add-printer" class="icon-btn add-printer-btn" type="button"
+              title="Add printer" aria-label="Add printer">+</button>
+      <div class="dropdown">
+        <button id="settings-toggle" class="icon-btn" type="button"
+                aria-haspopup="true" aria-expanded="false"
+                title="Settings" aria-label="Settings">⚙</button>
+      </div>
+      <div class="dropdown">
+        <button id="account-toggle" class="icon-btn account-toggle" type="button" hidden
+                aria-haspopup="true" aria-expanded="false"
+                title="Account" aria-label="Account"></button>
+      </div>
+    </div>
   </header>
 
   <main>
-    <section id="fleet" class="fleet" aria-live="polite"></section>
+    <div class="toolbar">
+      <input id="search" class="search-input" type="search" placeholder="Search printers…"
+             aria-label="Search printers" autocomplete="off">
+    </div>
+    <div id="groups" aria-live="polite"></div>
     <p id="empty" class="empty" hidden>
-      No printers configured yet. Add one to <code>printers.yaml</code> and restart.
+      No printers configured yet.
     </p>
   </main>
 
@@ -26,15 +46,15 @@
   <template id="card-template">
     <article class="card">
       <header class="card-head">
-        <h2 class="name"></h2>
+        <h2><a class="name" href="#"></a></h2>
         <div class="head-right">
           <span class="badge"></span>
-          <button class="edit-toggle" type="button" title="Edit IP address"
-                  aria-label="Edit IP address">⚙</button>
+          <button class="edit-toggle" type="button" title="Edit printer settings"
+                  aria-label="Edit printer settings">⚙</button>
         </div>
       </header>
 
-      <form class="editor" hidden>
+      <form class="editor" hidden autocomplete="off">
         <p class="editor-title">Printer settings</p>
         <label class="editor-field">
           <span>Name</span>
@@ -46,9 +66,19 @@
           <input class="host-input" type="text" inputmode="decimal"
                  autocomplete="off" spellcheck="false" placeholder="192.168.1.50">
         </label>
+        <label class="editor-field">
+          <span>Camera URL</span>
+          <input class="camera-url-input" type="text" autocomplete="off"
+                 spellcheck="false" placeholder="http://192.168.1.50:8000">
+        </label>
+        <label class="editor-field">
+          <span>Group</span>
+          <input class="group-input" type="text" autocomplete="off" placeholder="Garage">
+        </label>
         <div class="editor-actions">
           <button type="submit" class="btn-save">Save</button>
           <button type="button" class="btn-cancel">Cancel</button>
+          <button type="button" class="btn-delete-printer">Remove printer</button>
         </div>
         <p class="editor-error" role="alert" hidden></p>
       </form>
@@ -65,10 +95,15 @@
       </div>
 
       <div class="job" hidden>
-        <div class="progress"><div class="progress-bar"></div></div>
-        <div class="job-meta">
-          <span class="filename"></span>
-          <span class="eta"></span>
+        <div class="job-top">
+          <img class="job-thumb" alt="" hidden>
+          <div class="job-info">
+            <div class="progress"><div class="progress-bar"></div></div>
+            <div class="job-meta">
+              <span class="filename"></span>
+              <span class="eta"></span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -76,10 +111,23 @@
       <div class="camera" hidden>
         <video class="cam-frame" title="Printer camera — click for fullscreen"
                muted autoplay playsinline></video>
+        <p class="cam-status" role="status" hidden></p>
       </div>
     </article>
   </template>
 
-  <script src="app.js"></script>
+  <!-- One collapsible section per group, cloned per distinct group name. -->
+  <template id="group-template">
+    <details class="group" open>
+      <summary class="group-summary">
+        <span class="group-name"></span>
+        <span class="group-count"></span>
+      </summary>
+      <div class="group-grid fleet"></div>
+    </details>
+  </template>
+
+  <script src="/shared.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 # Real LAN layout / per-machine config — keep it off GitHub
 printers.yaml
+users.yaml
 
 # Secrets (auth credentials) — never commit these
 .env

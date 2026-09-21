@@ -1,18 +1,50 @@
 # PrintDeck for a homelab. Bring it up with:  docker compose up -d --build
+#
+# Everything host-specific is an env var with a sane standalone default (see
+# .env.example) — that's what lets another deployment (a homelab's own
+# compose stack, say) consume this image and point it at wherever *its*
+# persistent/backed-up storage lives, instead of editing this file.
 services:
   printdeck:
+    # Built locally by default (`--build` above). A GitHub Actions workflow
+    # also publishes this same image to ghcr.io — see .github/workflows/ —
+    # so an external deployment that only has this compose file (no source
+    # tree) can reference that image directly instead of build:, the same
+    # way this stack's own dependencies are referenced elsewhere.
+    image: ghcr.io/alexeastlake/printdeck:${PRINTDECK_IMAGE_TAG:-latest}
     build: .
     container_name: printdeck
     ports:
-      - "8000:8000"
-    # Credentials come from a .env file next to this one (copy .env.example).
-    # Leave them blank to run with no login (the app logs a warning).
+      - "${PRINTDECK_PORT:-8000}:8000"
+    # Admin bootstrap credentials come from a .env file next to this one
+    # (copy .env.example) — they only take effect on first boot, when
+    # users.yaml doesn't exist yet. Leave them blank to run with no login
+    # (the app logs a warning).
     environment:
-      - PRINTDECK_USERNAME=${PRINTDECK_USERNAME:-}
-      - PRINTDECK_PASSWORD=${PRINTDECK_PASSWORD:-}
-    # The app *writes* printers.yaml when you edit a printer in the UI, so mount
-    # it from the host to keep those edits across container rebuilds. The file
-    # must already exist on the host (cp printers.example.yaml printers.yaml).
+      - PRINTDECK_ADMIN_USERNAME=${PRINTDECK_ADMIN_USERNAME:-}
+      - PRINTDECK_ADMIN_PASSWORD=${PRINTDECK_ADMIN_PASSWORD:-}
+    # The app *writes* printers.yaml (printer edits) and users.yaml (accounts,
+    # managed from the Users page) at runtime, so both are mounted from the
+    # host to survive container rebuilds. PRINTDECK_DATA_DIR is where they
+    # live on the host — defaults to "." (next to this file) for a
+    # standalone clone; point it at wherever your actual persistent storage
+    # is (e.g. an NFS mount a backup job already covers) for anything more
+    # than that. Both files must already exist at that path first —
+    # `cp printers.example.yaml printers.yaml` and `touch users.yaml` —
+    # otherwise Docker creates a directory there instead of mounting a file.
+    # The container runs as uid 1000 (see Dockerfile) — if saving an edit in
+    # the UI fails with a permission error, `chmod 664` both files on the host.
     volumes:
-      - ./printers.yaml:/app/printers.yaml
+      - ${PRINTDECK_DATA_DIR:-.}/printers.yaml:/app/printers.yaml
+      - ${PRINTDECK_DATA_DIR:-.}/users.yaml:/app/users.yaml
+    # Least-privilege hardening: no new setuid/setgid privileges, no Linux
+    # capabilities beyond default-deny, and a read-only root filesystem (the
+    # app only ever writes to the mounted files above and to /tmp).
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
     restart: unless-stopped

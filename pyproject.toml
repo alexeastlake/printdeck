@@ -10,6 +10,8 @@ dependencies = [
     "pydantic>=2.7",
     "pyyaml>=6.0",
     "itsdangerous>=2.0",  # signed session cookies (Starlette SessionMiddleware)
+    "httpx>=0.27",        # async requests to a printer's Moonraker HTTP API
+    "python-multipart>=0.0.9",  # lets FastAPI parse the file-upload form
 ]
 
 [build-system]

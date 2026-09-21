@@ -1,6 +1,10 @@
 /* PrintDeck — restrained, hand-tuned. Light by default, gentle dark mode.
    No framework; just a small set of variables and a handful of components. */
 
+/* Theme: light values live on bare :root. Dark values are defined twice —
+   once for "system preference says dark" (guarded so an explicit light
+   choice can still override it) and once for an explicit dark choice via
+   the Settings page ([data-theme] wins regardless of system preference). */
 :root {
   --bg: #f6f5f2;
   --surface: #ffffff;
@@ -9,19 +13,23 @@
   --line: #e4e2dd;
   --accent: #3a6ea5;
 
-  /* status colours, kept muted on purpose */
-  --idle: #8a8f94;
+  /* status colours. idle reuses --accent on purpose — it's a genuine hue
+     (not grey), so it reads clearly apart from offline/connecting, which
+     are both "nothing active" states and deliberately closer to each
+     other (though still distinguishable — see --connecting). */
+  --idle: var(--accent);
   --printing: #2f8f6b;
   --paused: #c08a2d;
   --error: #b4564f;
   --offline: #b8b6b1;
+  --connecting: #8a6fb0;
 
   --radius: 10px;
   --shadow: 0 1px 2px rgba(0, 0, 0, .05), 0 4px 12px rgba(0, 0, 0, .04);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #16181a;
     --surface: #1f2225;
     --ink: #e8e7e3;
@@ -33,7 +41,27 @@
   }
 }
 
+:root[data-theme="dark"] {
+  --bg: #16181a;
+  --surface: #1f2225;
+  --ink: #e8e7e3;
+  --ink-soft: #9aa0a6;
+  --line: #2c2f33;
+  --accent: #6ea0d6;
+  --offline: #54585c;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 14px rgba(0, 0, 0, .25);
+}
+
 * { box-sizing: border-box; }
+
+/* Any element toggled with the `hidden` attribute must actually disappear.
+   The browser's own [hidden]{display:none} UA rule loses to *any* author
+   rule that sets `display` on the same element at equal specificity (author
+   styles always beat the UA stylesheet on a tie) — so a plain `.foo {
+   display: flex }` elsewhere is enough to leave a "hidden" element visible
+   but empty. This blanket rule wins every tie, permanently, instead of
+   needing a `.foo[hidden]` override hand-added for each new component. */
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -46,6 +74,7 @@ body {
 .topbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: .9rem;
   padding: 1.25rem 1.5rem;
   border-bottom: 1px solid var(--line);
@@ -58,6 +87,11 @@ body {
   letter-spacing: .01em;
   line-height: 1;
 }
+.topbar h1 a {
+  color: inherit;
+  text-decoration: none;
+}
+.topbar h1 a:hover { text-decoration: underline; }
 
 .conn {
   display: inline-flex;
@@ -87,20 +121,88 @@ body {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--paused) 22%, transparent);
 }
 
-.logout {
+/* Header icon buttons (Account, Add printer, Settings) — pushed flush
+   right. Each dropdown-triggering button sits in its own .dropdown wrapper
+   (position: relative) so its menu anchors under *that* button, not
+   wherever header-actions' own right edge happens to be. */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
   margin-left: auto;
-  font: inherit;
-  font-size: .78rem;
+}
+.dropdown { position: relative; display: flex; }
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  font-size: .95rem;
+  line-height: 1;
   color: var(--ink-soft);
+  text-decoration: none;
   background: none;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 999px;
-  padding: .25rem .7rem;
   cursor: pointer;
 }
-.logout:hover { color: var(--ink); border-color: var(--ink-soft); }
+.icon-btn:hover { color: var(--ink); border-color: var(--line); }
+.icon-btn[aria-expanded="true"] { color: var(--ink); background: var(--bg); }
 
 main { padding: 1.5rem; }
+@media (max-width: 480px) {
+  main { padding: 1rem; }
+  .topbar { padding: 1rem; }
+}
+
+/* --- search + groups --- */
+.toolbar { max-width: 1100px; margin-bottom: 1.25rem; }
+.search-input {
+  width: 100%;
+  max-width: 320px;
+  font: inherit;
+  font-size: .85rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: .5rem .9rem;
+}
+.search-input:focus { outline: none; border-color: var(--accent); }
+/* Matches #settings-toggle's .icon-btn styling, just a bigger glyph so a
+   bare "+" doesn't look lost next to the gear icon. */
+.add-printer-btn { font-size: 1.15rem; font-weight: 600; }
+/* A plain-text initial, same treatment as .add-printer-btn's "+" — bold so
+   it doesn't read as thin/small next to the heavier ⚙ glyph. */
+.account-toggle { font-size: .85rem; font-weight: 700; }
+
+.group { max-width: 1100px; margin-bottom: 1.5rem; }
+.group-summary {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin-bottom: .9rem;
+  font-size: .78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;  /* hide default marker; we draw our own */
+  user-select: none;
+}
+.group-summary::-webkit-details-marker { display: none; }
+.group-summary::before {
+  content: "▸";
+  display: inline-block;
+  font-size: .7rem;
+  transition: transform .15s ease;
+}
+.group[open] > .group-summary::before { transform: rotate(90deg); }
+.group-count { font-weight: 400; text-transform: none; letter-spacing: 0; }
 
 /* --- login page --- */
 .login-body {
@@ -120,15 +222,10 @@ main { padding: 1.5rem; }
   padding: 1.75rem 1.6rem 1.6rem;
 }
 .login-title {
-  margin: 0;
+  margin: 0 0 1.3rem;
   font-size: 1.3rem;
   font-weight: 600;
   letter-spacing: .01em;
-}
-.login-sub {
-  margin: .25rem 0 1.3rem;
-  font-size: .85rem;
-  color: var(--ink-soft);
 }
 .login-field {
   display: flex;
@@ -176,6 +273,12 @@ main { padding: 1.5rem; }
   gap: 1.25rem;
   max-width: 1100px;
 }
+/* Below one card's own minimum width, force a single column rather than
+   letting the grid squeeze a card (and its jog-pad-free but still fairly
+   packed contents) narrower than it was designed for. */
+@media (max-width: 360px) {
+  .fleet { grid-template-columns: 1fr; }
+}
 
 .empty {
   color: var(--ink-soft);
@@ -188,9 +291,28 @@ main { padding: 1.5rem; }
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 1.1rem 1.2rem 1.2rem;
+  /* The whole card opens the printer's detail page (see app.js) — this is
+     the affordance for that; inputs/buttons override back to their own. */
+  cursor: pointer;
+  transition: box-shadow .15s ease;
+}
+.card:hover {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, .08), 0 8px 20px rgba(0, 0, 0, .08);
 }
 /* a quiet left edge that picks up the printer's state colour */
 .card { border-left: 3px solid var(--state, var(--offline)); }
+/* An error is the one state worth catching at a glance across a busy
+   fleet — give it a tinted background, not just a small badge. */
+.card[data-state="error"] {
+  background: color-mix(in srgb, var(--error) 7%, var(--surface));
+  border-left-width: 4px;
+}
+/* Nothing actively happening on these — recede a touch so printing/paused/
+   error cards (the ones actually worth your attention) stand out more. */
+.card[data-state="offline"],
+.card[data-state="connecting"] {
+  opacity: .78;
+}
 
 .card-head {
   display: flex;
@@ -199,11 +321,30 @@ main { padding: 1.5rem; }
   gap: .75rem;
   margin-bottom: .9rem;
 }
+/* The name lives in an <a>; reset the wrapping heading so its default
+   font-size/margin don't add a big gap above it. */
+.card-head h2 {
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+}
 
 .name {
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
+}
+a.name {
+  color: inherit;
+  text-decoration: none;
+}
+a.name:hover { text-decoration: underline; }
+/* A small arrow after the name — a second, quieter cue (beyond the whole
+   card being clickable) that this leads somewhere. */
+a.name::after {
+  content: " ›";
+  opacity: .5;
 }
 
 .head-right {
@@ -259,6 +400,7 @@ main { padding: 1.5rem; }
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: .4rem .55rem;
+  cursor: text;  /* override the card's pointer cursor */
 }
 .editor-field input:focus {
   outline: none;
@@ -287,6 +429,18 @@ main { padding: 1.5rem; }
   color: var(--ink);
   background: var(--surface);
 }
+.btn-delete-printer {
+  font: inherit;
+  font-size: .8rem;
+  color: var(--surface);
+  background: var(--error);
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  padding: .35rem .7rem;
+  margin-left: auto;
+  cursor: pointer;
+}
+.btn-delete-printer:disabled { opacity: .6; cursor: default; }
 .editor-error {
   margin: .55rem 0 0;
   font-size: .78rem;
@@ -302,6 +456,13 @@ main { padding: 1.5rem; }
   padding: .15rem .5rem;
   border-radius: 999px;
   white-space: nowrap;
+}
+/* A static badge reading "connecting" doesn't feel like anything's
+   happening — a slow pulse makes clear it's mid-attempt, not stuck. */
+.card[data-state="connecting"] .badge { animation: state-pulse 1.6s ease-in-out infinite; }
+@keyframes state-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .55; }
 }
 
 .temps {
@@ -323,6 +484,39 @@ main { padding: 1.5rem; }
 .temp-value .target { font-size: .85rem; color: var(--ink-soft); }
 
 .job { margin-top: 1rem; }
+
+.job-top {
+  display: flex;
+  gap: .85rem;
+  align-items: flex-start;
+}
+.job-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-2, var(--line));
+  flex: none;
+  cursor: zoom-in;
+}
+
+.lightbox-overlay { cursor: zoom-out; }
+.lightbox-image {
+  max-width: 90vw;
+  max-height: 90vh;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  /* Slicer thumbnails are PNGs with a transparent background — without
+     this they just show the dim overlay through, which is low-contrast
+     against most model colors. A solid backdrop paints behind the alpha
+     channel same as it would behind any other image content. */
+  background: var(--surface);
+  padding: 1rem;
+}
+.job-info {
+  flex: 1;
+  min-width: 0;
+}
 
 .progress {
   height: 6px;
@@ -352,6 +546,16 @@ main { padding: 1.5rem; }
 }
 .eta { white-space: nowrap; }
 
+.job-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem 1rem;
+  margin-top: .4rem;
+  font-size: .8rem;
+  color: var(--ink-soft);
+}
+.job-stat b { color: var(--ink); font-weight: 600; }
+
 .cam-toggle {
   margin-top: 1rem;
   font: inherit;
@@ -364,7 +568,7 @@ main { padding: 1.5rem; }
 }
 .cam-toggle:hover { text-decoration: underline; }
 
-.camera { margin-top: .9rem; }
+.camera { position: relative; margin-top: .9rem; }
 .cam-frame {
   display: block;
   width: 100%;
@@ -376,6 +580,45 @@ main { padding: 1.5rem; }
   object-fit: cover;
   cursor: zoom-in;
 }
+
+/* Overlay shown while the WebRTC handshake is in flight, or if it never
+   pans out — otherwise a stalled connection just looks like a black box. */
+.cam-status {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  text-align: center;
+  font-size: .8rem;
+  color: #e8e7e3;
+  background: rgba(0, 0, 0, .55);
+  border-radius: 8px;
+  pointer-events: none;
+}
+.cam-status::before {
+  content: "";
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .3);
+  border-top-color: #fff;
+  animation: cam-spin .8s linear infinite;
+}
+.cam-status[data-state="error"] {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.cam-status[data-state="error"]::before {
+  animation: none;
+  border: none;
+  background: var(--error);
+  width: 8px;
+  height: 8px;
+}
+@keyframes cam-spin { to { transform: rotate(360deg); } }
 /* Fullscreen: show the whole frame, letterboxed, not cropped. */
 .cam-frame:fullscreen {
   border: none;
@@ -383,3 +626,833 @@ main { padding: 1.5rem; }
   object-fit: contain;
   cursor: default;
 }
+
+/* --- printer detail page ---
+   Deliberately no card box here (unlike the dashboard) — this page IS the
+   content, not a tile representing it among others. Sections are separated
+   by a divider + whitespace instead of a border/shadow/background. */
+.detail-main { max-width: 1200px; }
+.detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+.detail-title { display: flex; align-items: center; gap: .65rem; }
+.detail-title h2 { margin: 0; font-size: 1.5rem; font-weight: 600; }
+.state-dot {
+  flex: none;
+  width: .6rem;
+  height: .6rem;
+  border-radius: 50%;
+  background: var(--state, var(--offline));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--state, var(--offline)) 20%, transparent);
+}
+#detail-card[data-state="connecting"] .state-dot { animation: state-pulse 1.6s ease-in-out infinite; }
+/* Bigger, widescreen frame — this page has room the dashboard card doesn't. */
+.detail-camera .cam-frame { aspect-ratio: 16 / 9; }
+.klipper-status {
+  margin: 0 0 1.25rem;
+  font-size: .82rem;
+  color: var(--ink-soft);
+}
+.klipper-status-value {
+  color: var(--ink);
+  font-weight: 600;
+}
+.printer-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem 1.5rem;
+  margin: 0 0 1.25rem;
+  font-size: .82rem;
+  color: var(--ink-soft);
+}
+.printer-info-item b { color: var(--ink); font-weight: 600; }
+/* Now lives under the camera instead of inside .printer-info — needs its
+   own font-size/color/spacing since it's no longer that flex row's child. */
+.printer-info-camera-item {
+  margin: .6rem 0 0;
+  font-size: .82rem;
+  color: var(--ink-soft);
+}
+.detail-message {
+  margin: 1rem 0 0;
+  font-size: .85rem;
+  color: var(--ink-soft);
+}
+.not-found { color: var(--ink-soft); max-width: 840px; }
+
+/* --- printer controls (detail page) ---
+   Full width, own row below the camera (pairing it beside the camera read
+   as an arbitrary grouping rather than a meaningful one). Three blocks
+   side by side on a wide screen; stacks on anything narrower than a small
+   laptop, since each block (controls + a graph) needs real room to be
+   legible, not squeezed into a third of a phone screen. */
+.controls-section { margin-top: 2rem; }
+.controls-section h3 { margin: 0 0 1.1rem; font-size: 1.05rem; font-weight: 600; }
+.controls-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2rem;
+}
+@media (max-width: 900px) {
+  .controls-grid { grid-template-columns: 1fr; }
+}
+
+.control-block {
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+@media (min-width: 901px) {
+  /* On the 3-column layout the top border already separates each block
+     from the "Controls" heading above; a side divider reads better than
+     a top one repeated three times in a row. */
+  .control-block { padding-top: 0; border-top: none; }
+  .fan-block, .move-block { padding-left: 2rem; border-left: 1px solid var(--line); }
+}
+
+.control-row {
+  display: grid;
+  align-items: center;
+  gap: .5rem;
+  margin-bottom: .6rem;
+}
+.control-row:last-child { margin-bottom: 0; }
+.control-label { font-size: .82rem; color: var(--ink-soft); }
+
+.temp-row,
+.fan-row { grid-template-columns: 3.2rem 1fr auto auto; }
+.temp-row input[type="number"],
+.fan-row input[type="number"] {
+  width: 100%;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .35rem .5rem;
+}
+.temp-row input[type="number"]:focus,
+.fan-row input[type="number"]:focus { outline: none; border-color: var(--accent); }
+.control-unit { font-size: .8rem; color: var(--ink-soft); }
+.control-buttons { display: flex; gap: .4rem; }
+.control-buttons button {
+  font: inherit;
+  font-size: .76rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: .3rem .65rem;
+  cursor: pointer;
+}
+.control-buttons button:hover { border-color: var(--ink-soft); }
+
+/* Each control block's graph sits at the top, controls below — puts the
+   temp and fan graphs side by side at a glance instead of buried under a
+   variable amount of control rows. Two legend rows, not one wrapping flex
+   row — color legend (what each line's color means) and style legend
+   (solid vs dashed) are different *kinds* of key, and letting them wrap
+   into each other read as broken, not just busy. */
+.control-block .graph-block { margin-bottom: 1rem; }
+.graph-legend { margin-bottom: .5rem; }
+.legend-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .3rem 1.1rem;
+  font-size: .76rem;
+  color: var(--ink-soft);
+}
+.legend-style-row { margin-top: .25rem; font-size: .72rem; }
+.legend-item { display: flex; align-items: center; gap: .35rem; white-space: nowrap; }
+.legend-swatch { width: .5rem; height: .5rem; border-radius: 2px; flex: none; }
+.swatch-extruder { background: var(--paused); }
+.swatch-bed { background: var(--accent); }
+.swatch-fan { background: var(--printing); }
+.legend-value { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* A short line sample instead of a swatch, for the two line *styles*
+   (actual vs target) — those aren't a color distinction, so a color swatch
+   would be the wrong cue. */
+.legend-sample { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--ink-soft); flex: none; }
+.legend-sample-dashed { border-top-style: dashed; }
+
+/* A proper axis gutter beside the chart (not text floated over the plot,
+   which could collide with a line sitting near that edge) — the Y-axis
+   labels live in their own column, sized to content, with the plot (SVG +
+   X-axis caption) taking the rest. The SVG itself only ever carries the
+   plotted lines; every label here is plain positioned text, never SVG
+   text, so nothing gets stretched by the non-uniform scaling
+   preserveAspectRatio="none" applies to the lines. */
+.graph-frame { display: flex; gap: .5rem; }
+.graph-y-labels {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  flex: none;
+  padding: .15rem 0;
+  text-align: right;
+  font-size: .68rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.graph-plot { flex: 1; min-width: 0; }
+.graph-svg {
+  display: block;
+  width: 100%;
+  height: 90px;
+  background: var(--bg);
+  border-radius: 8px;
+}
+.graph-grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.graph-x-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: .3rem;
+  font-size: .68rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.graph-line {
+  fill: none;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+}
+.graph-extruder { stroke: var(--paused); }
+.graph-bed { stroke: var(--accent); }
+.graph-fan { stroke: var(--printing); }
+.graph-target { stroke-dasharray: 5 4; stroke-width: 1.5; opacity: .55; }
+
+.move-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: .6rem;
+  margin-bottom: 1rem;
+}
+.position-readout {
+  display: flex;
+  gap: .9rem;
+  font-size: .8rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.position-item b { color: var(--ink); font-weight: 600; }
+.step-picker { display: flex; align-items: center; gap: .25rem; }
+.step-btn {
+  font: inherit;
+  font-size: .76rem;
+  color: var(--ink-soft);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .25rem .5rem;
+  cursor: pointer;
+}
+.step-btn.active { color: var(--surface); background: var(--accent); border-color: var(--accent); }
+.step-unit { font-size: .74rem; color: var(--ink-soft); margin-left: .1rem; }
+
+.move-pads {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+}
+.jog-pad {
+  display: grid;
+  grid-template-columns: repeat(3, 2.7rem);
+  grid-template-rows: repeat(3, 2.7rem);
+  gap: .35rem;
+}
+.jog-btn,
+.jog-home {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: .78rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color .12s ease, color .12s ease;
+}
+.jog-home { font-size: 1.2rem; color: var(--ink-soft); background: var(--surface); }
+.jog-btn:hover:not(:disabled),
+.jog-home:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.jog-btn:active:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
+.jog-btn:disabled,
+.jog-home:disabled { opacity: .3; cursor: default; }
+.jog-z { display: flex; flex-direction: column; gap: .35rem; }
+.jog-z .jog-btn { width: 2.7rem; height: 2.7rem; }
+
+/* Explains *why* the jog pad is greyed out — otherwise a disabled control
+   with no reason given just looks broken. */
+.move-disabled-note {
+  margin: .8rem 0 0;
+  font-size: .78rem;
+  color: var(--ink-soft);
+}
+
+.controls-status {
+  margin: 1rem 0 0;
+  font-size: .82rem;
+  color: var(--ink-soft);
+}
+.controls-status.controls-error { color: var(--error); }
+
+/* --- file browser (detail page) ---
+   Flat, like the rest of this page — a divider above sets it apart from the
+   status section, not a box. Rows form a table via matching grid columns on
+   the header and each entry, which is what makes it read as a "real" file
+   manager instead of a plain list. */
+.files-section {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+.files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  flex-wrap: wrap;
+  margin-bottom: .9rem;
+}
+.files-head h3 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+.files-controls { display: flex; align-items: center; gap: .5rem; }
+.files-search {
+  font: inherit;
+  font-size: .8rem;
+  width: 12rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: .3rem .7rem;
+}
+.files-search:focus { outline: none; border-color: var(--accent); }
+.files-new-folder,
+.files-upload {
+  font: inherit;
+  font-size: .78rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: .3rem .7rem;
+  cursor: pointer;
+}
+.files-new-folder:hover,
+.files-upload:hover { border-color: var(--ink-soft); }
+
+/* Breadcrumb segments are buttons (not links) — nothing here is real
+   navigation, and buttons sidestep any browser default-action/focus-scroll
+   quirks entirely. */
+.files-breadcrumb {
+  margin-bottom: .8rem;
+  font-size: .78rem;
+  color: var(--ink-soft);
+}
+.breadcrumb-segment {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.breadcrumb-segment:hover { color: var(--accent); text-decoration: underline; }
+.breadcrumb-segment:last-child { color: var(--ink); font-weight: 600; cursor: default; }
+.breadcrumb-segment:last-child:hover { color: var(--ink); text-decoration: none; }
+
+.files-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  margin-bottom: .6rem;
+  padding: .5rem .7rem;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+  border-radius: 8px;
+  font-size: .82rem;
+}
+.files-bulk-count { color: var(--ink-soft); }
+.files-bulk-delete {
+  margin-left: auto;
+  font: inherit;
+  font-size: .78rem;
+  color: var(--surface);
+  background: var(--error);
+  border: none;
+  border-radius: 999px;
+  padding: .3rem .7rem;
+  cursor: pointer;
+}
+.files-bulk-delete:disabled { opacity: .6; cursor: default; }
+
+.files-table-head,
+.file-entry {
+  display: grid;
+  grid-template-columns: 1.4rem 1fr 5rem 6.5rem 4rem;
+  align-items: center;
+  gap: .6rem;
+}
+.files-table-head {
+  padding: 0 .2rem .5rem;
+  border-bottom: 1px solid var(--line);
+  font-size: .72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-soft);
+}
+.files-col-check { display: flex; align-items: center; }
+.files-sort-btn {
+  font: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.files-sort-btn:nth-child(3), .files-sort-btn:nth-child(4) { text-align: right; }
+.files-sort-btn.active { color: var(--ink); }
+.files-sort-btn.active[data-dir="asc"]::after { content: " ↑"; }
+.files-sort-btn.active[data-dir="desc"]::after { content: " ↓"; }
+
+.files-list { list-style: none; margin: 0; padding: 0; }
+.file-entry {
+  padding: .55rem .2rem;
+  font-size: .85rem;
+  border-bottom: 1px solid var(--line);
+}
+.file-entry-dir { cursor: pointer; }
+.file-entry-dir:hover { color: var(--accent); }
+.file-name-cell { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+.file-icon { flex: none; font-size: .95rem; }
+.file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-meta,
+.file-modified {
+  text-align: right;
+  font-size: .78rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+/* Rename/delete: always visible but subtle, full opacity on hover — visible
+   without needing a hover state (useful on touch), but not shouty. */
+.file-actions { display: flex; justify-content: flex-end; gap: .25rem; }
+.file-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  /* 🗑 is a colour emoji — it ignores `color` entirely, so size/opacity are
+     the only real levers for keeping it legible rather than a faint smudge. */
+  font-size: 1.05rem;
+  line-height: 1;
+  color: var(--ink-soft);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  opacity: .75;
+  cursor: pointer;
+}
+.file-actions button:hover { opacity: 1; background: var(--bg); }
+.file-delete:hover { color: var(--error); }
+.file-empty {
+  padding: .7rem .2rem;
+  font-size: .85rem;
+  color: var(--ink-soft);
+}
+.files-load-more {
+  display: block;
+  margin: .9rem auto 0;
+  font: inherit;
+  font-size: .8rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: .4rem 1rem;
+  cursor: pointer;
+}
+.files-load-more:hover { border-color: var(--ink-soft); }
+.files-status {
+  margin: .6rem 0 0;
+  font-size: .82rem;
+  color: var(--ink-soft);
+}
+.files-status.files-error { color: var(--error); }
+
+/* --- users admin page --- */
+.users-main { max-width: 760px; }
+.users-title { margin: 0 0 .3rem; font-size: 1.4rem; font-weight: 600; }
+.users-sub { margin: 0 0 1.5rem; font-size: .85rem; color: var(--ink-soft); }
+
+.users-add {
+  display: flex;
+  align-items: flex-end;
+  gap: .9rem;
+  flex-wrap: wrap;
+  margin-bottom: .4rem;
+}
+.users-add .login-field { margin-bottom: 0; }
+.users-field-name, .users-field-password { width: 12rem; }
+.users-field-role { width: 10rem; }
+.users-add-btn { width: auto; padding: .5rem 1.1rem; }
+.users-add-error { margin-bottom: 1.5rem; }
+
+.users-table-head,
+.user-row {
+  display: grid;
+  /* Fixed widths for every column but the first, on purpose: .users-table-head
+     and .user-row are separate grid containers (one per row), so an `auto`
+     column sizes independently in each based on *that row's own content* —
+     the header's empty actions cell computes a different width than a data
+     row's "Reset password" + trash icon, which throws off where every column
+     after it starts. Fixed widths make both compute identically. */
+  grid-template-columns: 1fr 8rem 11rem;
+  align-items: center;
+  gap: .6rem;
+}
+.users-table-head {
+  padding: 0 .2rem .5rem;
+  border-bottom: 1px solid var(--line);
+  font-size: .72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-soft);
+}
+.users-list { list-style: none; margin: 0; padding: 0; }
+.user-row {
+  padding: .6rem .2rem;
+  font-size: .85rem;
+  border-bottom: 1px solid var(--line);
+}
+.user-role-select,
+.add-role {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  font-size: .8rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .35rem 1.7rem .35rem .6rem;
+  /* A bare native <select> looks out of place next to everything else
+     here being custom-styled flat/minimal — swap its default OS chrome
+     for a plain chevron that matches. */
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%238a8f94' stroke-width='1.5' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right .6rem center;
+  background-size: .65rem;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+.user-actions { display: flex; justify-content: flex-end; gap: .5rem; }
+.user-reset-password {
+  font: inherit;
+  font-size: .78rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: .3rem .7rem;
+  cursor: pointer;
+}
+.user-reset-password:hover { border-color: var(--ink-soft); }
+.user-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  /* 🗑 is a colour emoji — it ignores `color` entirely, so size is the
+     main lever for keeping it legible rather than a faint smudge. */
+  font-size: 1.1rem;
+  color: var(--ink-soft);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.user-delete:hover { color: var(--error); background: var(--bg); }
+.users-status {
+  margin: .8rem 0 0;
+  font-size: .82rem;
+  color: var(--ink-soft);
+}
+.users-status.users-error { color: var(--error); }
+
+/* --- roles admin page --- */
+.roles-add {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: .4rem;
+}
+.roles-field-name { width: 16rem; }
+.roles-add .login-field { margin-bottom: 0; }
+.roles-add-btn { width: auto; padding: .5rem 1.1rem; }
+.roles-add-error { margin-bottom: 1.5rem; }
+
+.roles-permissions {
+  display: flex;
+  flex-flow: row wrap;
+  gap: .5rem 1.3rem;
+  border: none;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+}
+.roles-permissions legend {
+  padding: 0;
+  margin-bottom: .2rem;
+  font-size: .72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-soft);
+}
+.permission-option {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .82rem;
+  cursor: pointer;
+}
+
+.roles-table-head,
+.role-row {
+  /* Same fixed-width reasoning as .users-table-head/.user-row above — an
+     `auto` actions column sizes independently per (separate) grid
+     container, misaligning header vs. rows once row content isn't empty. */
+  grid-template-columns: 9rem 1fr 8rem;
+}
+.role-permissions {
+  font-size: .8rem;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+.role-edit {
+  font: inherit;
+  font-size: .78rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: .3rem .7rem;
+  cursor: pointer;
+}
+.role-edit:hover { border-color: var(--ink-soft); }
+
+/* --- missing permissions: hide controls that would just 403 --- */
+/* The server is the real gate (see app/routes.py's manage_printers_only /
+   manage_files_only / control_printers_only dependencies) — this is only
+   so an account without a permission doesn't see buttons that don't work.
+   body gets one can-<permission> class per permission the account actually
+   has (see shared.js's applyPermissionStyling) — :not() here means "until
+   we know otherwise", so these stay hidden during the brief window before
+   that class lands too, rather than flashing visible first. */
+body:not(.can-manage-printers) .edit-toggle,
+body:not(.can-manage-printers) .add-printer-btn,
+body:not(.can-manage-printers) .printer-info,
+body:not(.can-manage-printers) .printer-info-camera-item,
+body:not(.can-manage-files) .files-section,
+body:not(.can-control-printers) .control-row,
+body:not(.can-control-printers) .jog-btn,
+body:not(.can-control-printers) .jog-home,
+body:not(.can-control-printers) .step-picker,
+body:not(.can-control-printers) .move-disabled-note {
+  display: none !important;
+}
+
+/* --- settings dropdown --- */
+/* Anchored to #settings-toggle (position: relative on .header-actions). Not
+   enough settings yet to warrant a whole page. */
+.settings-menu {
+  position: absolute;
+  top: calc(100% + .6rem);
+  right: 0;
+  z-index: 20;
+  min-width: 210px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: .9rem 1rem;
+  /* Buttons upstream set cursor: pointer for the whole header-actions area;
+     this is a content panel, not a button. */
+  cursor: default;
+}
+.theme-picker {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  border: none;
+  padding: 0;
+  margin: 0 0 .8rem;
+}
+.theme-picker legend {
+  font-size: .7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-soft);
+  padding: 0;
+  margin-bottom: .3rem;
+}
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .85rem;
+  cursor: pointer;
+}
+.settings-links {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  margin-top: .8rem;
+  padding-top: .7rem;
+  border-top: 1px solid var(--line);
+}
+.settings-users,
+.settings-roles,
+.settings-github {
+  font-size: .8rem;
+  color: var(--ink-soft);
+  text-decoration: none;
+}
+.settings-users:hover,
+.settings-roles:hover,
+.settings-github:hover { color: var(--accent); }
+.settings-credit {
+  margin: .5rem 0 0;
+  font-size: .72rem;
+  color: var(--ink-soft);
+}
+.settings-credit a { color: inherit; }
+.settings-credit a:hover { color: var(--accent); }
+
+/* --- account dropdown --- */
+.account-menu { min-width: 170px; }
+.account-user {
+  margin: 0;
+  font-size: .9rem;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.account-role {
+  margin: .15rem 0 .8rem;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-soft);
+}
+.account-logout {
+  display: block;
+  width: 100%;
+  font: inherit;
+  font-size: .8rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .4rem .6rem;
+  cursor: pointer;
+}
+.account-logout:hover { border-color: var(--ink-soft); }
+
+/* --- modal dialogs (replaces confirm()/prompt()) --- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, .35);
+  padding: 1.5rem;
+}
+.modal-panel {
+  width: 100%;
+  max-width: 360px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.25rem 1.4rem 1.4rem;
+}
+.modal-title {
+  margin: 0 0 .6rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.modal-message {
+  margin: 0 0 1rem;
+  font-size: .88rem;
+  color: var(--ink-soft);
+}
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: .3rem;
+  margin-bottom: 1rem;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ink-soft);
+}
+.modal-input {
+  font: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .5rem .6rem;
+}
+.modal-input:focus { outline: none; border-color: var(--accent); }
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: .5rem;
+}
+.modal-cancel,
+.modal-confirm {
+  font: inherit;
+  font-size: .85rem;
+  border-radius: 6px;
+  padding: .4rem .9rem;
+  cursor: pointer;
+  border: 1px solid var(--line);
+}
+.modal-cancel { color: var(--ink); background: var(--surface); }
+.modal-confirm { color: var(--surface); background: var(--accent); border-color: var(--accent); }
+.modal-confirm.danger { background: var(--error); border-color: var(--error); }
