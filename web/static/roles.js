@@ -1,7 +1,5 @@
-// PrintDeck role management (needs the manage_roles permission). The page
-// itself is also server-side gated (see app/main.py's /roles route), but
-// bounce accounts without it client-side too rather than showing a page
-// that'll just 403 on every call.
+// Roles page. Server-gated on manage_roles; also bounces client-side so a
+// stale tab doesn't just 403 on every call.
 
 const rolesList = document.querySelector(".roles-list");
 const roleRowTemplate = document.getElementById("role-row-template");
@@ -11,7 +9,7 @@ const addPermissionsField = document.querySelector(".add-permissions");
 const addError = document.querySelector(".roles-add-error");
 const addBtn = document.querySelector(".roles-add-btn");
 
-let permissionCatalog = [];  // fetched once — {id, label, description}[]
+let permissionCatalog = [];  // fetched once; {id, label, description}[]
 
 function setStatus(text, isError = false) {
   rolesStatus.textContent = text;
@@ -25,8 +23,7 @@ async function loadPermissionCatalog() {
   permissionCatalog = await res.json();
 }
 
-// Shared by the add-role fieldset and the edit-role modal — a checkbox per
-// known permission, in the same order the backend defines them.
+// Catalog comes from the backend (trusted), so an HTML string is fine here.
 function permissionCheckboxesHtml(checkedIds, namePrefix) {
   return permissionCatalog.map((p) => `
     <label class="permission-option" title="${p.description}">
@@ -77,8 +74,7 @@ function roleRow(role) {
     });
     if (!ok) return;
     try {
-      const res = await fetch(`/api/roles/${encodeURIComponent(role.id)}`, { method: "DELETE" });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `error ${res.status}`);
+      await api(`/api/roles/${encodeURIComponent(role.id)}`, { method: "DELETE" });
       loadRoles();
     } catch (err) {
       setStatus(`Couldn't delete role: ${err.message}`, true);
@@ -126,12 +122,7 @@ function openEditRoleDialog(role) {
     }
     confirmBtn.disabled = true;
     try {
-      const res = await fetch(`/api/roles/${encodeURIComponent(role.id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, permissions: checkedPermissions(permissionsField) }),
-      });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `error ${res.status}`);
+      await api(`/api/roles/${encodeURIComponent(role.id)}`, { method: "PATCH", json: { name, permissions: checkedPermissions(permissionsField) } });
       close();
       loadRoles();
     } catch (err) {
@@ -155,12 +146,7 @@ addForm.addEventListener("submit", async (event) => {
   addBtn.disabled = true;
   try {
     const name = addForm.querySelector(".add-role-name").value.trim();
-    const res = await fetch("/api/roles", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, permissions: checkedPermissions(addPermissionsField) }),
-    });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `error ${res.status}`);
+    await api("/api/roles", { method: "POST", json: { name, permissions: checkedPermissions(addPermissionsField) } });
     addForm.reset();
     loadRoles();
   } catch (err) {

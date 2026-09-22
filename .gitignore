@@ -1,8 +1,8 @@
-# Real LAN layout / per-machine config — keep it off GitHub
+# Real LAN layout / per-machine config. Keep it off GitHub
 printers.yaml
 users.yaml
 
-# Secrets (auth credentials) — never commit these
+# Secrets (auth credentials). Never commit these
 .env
 printdeck.env
 
@@ -19,3 +19,9 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Docker compose default data directory (printers.yaml + users.yaml live here)
+data/
+
+# Tooling caches
+.ruff_cache/

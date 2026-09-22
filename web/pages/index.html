@@ -3,33 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- Applied before first paint so there's no flash of the wrong theme;
-       see shared.js for what sets/reads this. -->
-  <script>try{var t=localStorage.getItem("printdeck-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}</script>
   <title>PrintDeck</title>
-  <!-- Inline favicon (stacked print layers) — no separate file, no /favicon.ico 404. -->
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233a6ea5'/%3E%3Crect x='8' y='9' width='16' height='3.2' rx='1.6' fill='white'/%3E%3Crect x='8' y='14.4' width='16' height='3.2' rx='1.6' fill='white'/%3E%3Crect x='8' y='19.8' width='16' height='3.2' rx='1.6' fill='white'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <!-- Blocking: sets the theme before first paint. -->
+  <script src="/static/theme-init.js"></script>
 </head>
 <body>
-  <header class="topbar">
-    <h1><a href="/">PrintDeck</a></h1>
-    <span id="conn" class="conn" data-state="connecting">Connecting to server…</span>
-    <div class="header-actions">
-      <button id="add-printer" class="icon-btn add-printer-btn" type="button"
-              title="Add printer" aria-label="Add printer">+</button>
-      <div class="dropdown">
-        <button id="settings-toggle" class="icon-btn" type="button"
-                aria-haspopup="true" aria-expanded="false"
-                title="Settings" aria-label="Settings">⚙</button>
-      </div>
-      <div class="dropdown">
-        <button id="account-toggle" class="icon-btn account-toggle" type="button" hidden
-                aria-haspopup="true" aria-expanded="false"
-                title="Account" aria-label="Account"></button>
-      </div>
-    </div>
-  </header>
+  <!-- Filled by shared.js mountTopbar(); data-* attributes pick the extras. -->
+  <header class="topbar" data-conn data-add-printer></header>
 
   <main>
     <div class="toolbar">
@@ -42,7 +24,6 @@
     </p>
   </main>
 
-  <!-- A card is cloned from this template per printer. -->
   <template id="card-template">
     <article class="card">
       <header class="card-head">
@@ -65,6 +46,24 @@
           <span>IP / hostname</span>
           <input class="host-input" type="text" inputmode="decimal"
                  autocomplete="off" spellcheck="false" placeholder="192.168.1.50">
+        </label>
+        <label class="editor-field">
+          <span>Moonraker port</span>
+          <input class="port-input" type="number" min="1" max="65535" step="1" inputmode="numeric"
+                 autocomplete="off" placeholder="7125">
+        </label>
+        <label class="editor-field">
+          <span>API key (optional)</span>
+          <input class="api-key-input" type="password" autocomplete="off" spellcheck="false"
+                 placeholder="Only if Moonraker requires one">
+        </label>
+        <label class="editor-field editor-field-check">
+          <input class="tls-input" type="checkbox">
+          <span>Connect over HTTPS/WSS</span>
+        </label>
+        <label class="editor-field editor-field-check">
+          <input class="creality-light-input" type="checkbox">
+          <span>Creality chamber light (K1 stock firmware, port 9999)</span>
         </label>
         <label class="editor-field">
           <span>Camera URL</span>
@@ -103,20 +102,27 @@
               <span class="filename"></span>
               <span class="eta"></span>
             </div>
+            <div class="job-actions">
+              <button class="job-pause job-control" type="button" hidden>Pause</button>
+              <button class="job-resume job-control" type="button" hidden>Resume</button>
+              <button class="job-cancel job-control danger" type="button" hidden>Cancel</button>
+              <span class="job-finished" hidden></span>
+              <button class="job-dismiss" type="button" hidden>Dismiss</button>
+            </div>
           </div>
         </div>
+        <p class="job-error" role="alert" hidden></p>
       </div>
 
       <button class="cam-toggle" type="button" hidden>Show camera</button>
       <div class="camera" hidden>
-        <video class="cam-frame" title="Printer camera — click for fullscreen"
+        <video class="cam-frame" title="Printer camera. Click for fullscreen"
                muted autoplay playsinline></video>
         <p class="cam-status" role="status" hidden></p>
       </div>
     </article>
   </template>
 
-  <!-- One collapsible section per group, cloned per distinct group name. -->
   <template id="group-template">
     <details class="group" open>
       <summary class="group-summary">
@@ -127,7 +133,7 @@
     </details>
   </template>
 
-  <script src="/shared.js"></script>
-  <script src="/app.js"></script>
+  <script src="/static/shared.js"></script>
+  <script src="/static/app.js"></script>
 </body>
 </html>

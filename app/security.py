@@ -1,11 +1,6 @@
-"""Password hashing — stdlib only (PBKDF2-HMAC-SHA256), no bcrypt/passlib
-dependency. 600,000 iterations matches OWASP's 2023 recommendation for
-PBKDF2-SHA256, which is plenty for a self-hosted LAN dashboard.
-
-Hashes are stored as a self-describing string so the algorithm/iteration
-count can change later without breaking existing accounts:
-  pbkdf2_sha256$<iterations>$<salt-hex>$<hash-hex>
-"""
+"""Stdlib PBKDF2-HMAC-SHA256, 600k iterations (OWASP 2023). Stored as
+pbkdf2_sha256$<iterations>$<salt-hex>$<hash-hex> so the parameters can
+change later without breaking existing accounts."""
 
 from __future__ import annotations
 
@@ -39,7 +34,6 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 def dummy_verify() -> None:
-    """Spend the same time as a real verify_password() call, for a login
-    against a username that doesn't exist — so the response timing doesn't
-    give away whether a username is valid before the password is checked."""
+    """Burn the same time as a real verify so login timing doesn't reveal
+    whether a username exists."""
     hashlib.pbkdf2_hmac("sha256", b"", b"\x00" * SALT_BYTES, ITERATIONS)

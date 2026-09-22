@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrintDeck - Users</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/theme-init.js"></script>
+</head>
+<body>
+  <header class="topbar"></header>
+
+  <main class="users-main">
+    <h2 class="users-title">Users</h2>
+    <p class="users-sub">Each account has a role, which decides what it can see and do. Manage roles and their permissions on the <a href="/roles">Roles page</a>.</p>
+
+    <form class="users-add" autocomplete="off">
+      <label class="login-field users-field-name">
+        <span>Username</span>
+        <input class="add-username" type="text" autocomplete="off" required
+               maxlength="32" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,31}"
+               title="Letters, digits, dots, hyphens and underscores; 1-32 characters">
+      </label>
+      <label class="login-field users-field-password">
+        <span>Password</span>
+        <input class="add-password" type="password" autocomplete="new-password" minlength="8" maxlength="256" required>
+      </label>
+      <label class="login-field users-field-role">
+        <span>Role</span>
+        <select class="add-role"></select>
+      </label>
+      <button type="submit" class="login-btn users-add-btn">Add user</button>
+    </form>
+    <p class="users-add-error login-error" role="alert" hidden></p>
+
+    <div class="users-table">
+      <div class="users-table-head">
+        <span>Username</span>
+        <span>Role</span>
+        <span></span>
+      </div>
+      <ul class="users-list"></ul>
+    </div>
+    <p class="users-status" hidden></p>
+  </main>
+
+  <template id="user-row-template">
+    <li class="user-row">
+      <span class="user-name"></span>
+      <select class="user-role-select"></select>
+      <span class="user-actions">
+        <button type="button" class="user-reset-password">Reset password</button>
+        <button type="button" class="user-delete" title="Delete" aria-label="Delete">🗑</button>
+      </span>
+    </li>
+  </template>
+
+  <script src="/static/shared.js"></script>
+  <script src="/static/users.js"></script>
+</body>
+</html>

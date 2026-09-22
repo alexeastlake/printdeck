@@ -1,7 +1,4 @@
-// PrintDeck dashboard. No framework: open the websocket, keep one card per
-// printer in sync (organized into collapsible group sections), and fall
-// back to polling if the socket goes away. Shared formatters/camera/editor
-// code lives in shared.js, loaded before this file.
+// Dashboard: one card per printer over /ws, polling fallback. shared.js loads first.
 
 const groupsEl = document.getElementById("groups");
 const emptyNote = document.getElementById("empty");
@@ -10,10 +7,8 @@ const cardTemplate = document.getElementById("card-template");
 const groupTemplate = document.getElementById("group-template");
 const searchInput = document.getElementById("search");
 
-// Keep references to each card so updates are a cheap lookup, not a re-render.
-const cards = new Map();
-// One collapsible section per group name ("" -> "Ungrouped").
-const groups = new Map();
+const cards = new Map();   // id -> card element
+const groups = new Map();  // group name -> section ("" -> "Ungrouped")
 
 // --- rendering ---------------------------------------------------------------
 
@@ -26,9 +21,7 @@ function cardFor(id) {
 
   const detailUrl = `/printer/${encodeURIComponent(id)}`;
   card.querySelector(".name").href = detailUrl;
-  // The name is a real link, but the whole card is also a click target — an
-  // easier target to hit than the title text alone. Clicks on anything
-  // actually interactive (links, buttons, the editor, the camera) opt out.
+  // Whole card is a click target; interactive children opt out.
   card.addEventListener("click", (event) => {
     if (event.target.closest("a, button, .editor, .camera")) return;
     location.href = detailUrl;
@@ -41,15 +34,12 @@ function cardFor(id) {
     const opening = camera.hidden;
     camera.hidden = !opening;
     toggle.textContent = opening ? "Hide camera" : "Show camera";
-    // Open the WebRTC connection only on reveal; tear it down when hidden.
     if (opening) startCamera(card, id);
     else stopCamera(card);
   });
-  // The preview fills the card; click it to see the whole frame fullscreen.
   video.addEventListener("click", () => {
     if (video.srcObject && document.fullscreenEnabled) video.requestFullscreen();
   });
-  // "Click to retry" in the error overlay actually does something.
   card.querySelector(".cam-status").addEventListener("click", (event) => {
     if (event.currentTarget.dataset.state === "error") startCamera(card, id);
   });
@@ -59,6 +49,8 @@ function cardFor(id) {
   thumb.addEventListener("error", () => { thumb.hidden = true; });
 
   wirePrinterEditor(card, id);
+  // Dismiss is local, so repaint now rather than waiting for the next tick.
+  wireJobControls(card, id, { onDismiss: () => { if (card._status) render(card._status); } });
   return card;
 }
 
@@ -66,15 +58,21 @@ function render(status) {
   emptyNote.hidden = true;
   const card = cardFor(status.id);
   card.dataset.host = status.host || "";  // prefill for the editor
+  card.dataset.port = String(status.moonraker_port || 7125);
+  card.dataset.hasApiKey = String(Boolean(status.has_api_key));
+  card.dataset.tls = String(Boolean(status.tls));
+  card.dataset.crealityLight = String(Boolean(status.creality_light));
   card.dataset.cameraUrl = status.camera_url || "";
   card.dataset.group = status.group || "";
-  card.dataset.state = status.state;
-  card.style.setProperty("--state", STATE_COLOR[status.state] || STATE_COLOR.offline);
+  card._status = status;
+  const state = displayState(status);  // "complete" reads as idle once dismissed here
+  card.dataset.state = state;
+  card.style.setProperty("--state", STATE_COLOR[state] || STATE_COLOR.offline);
 
   card.querySelector(".name").textContent = status.name;
 
   const badge = card.querySelector(".badge");
-  badge.textContent = status.state;
+  badge.textContent = state;
 
   card.querySelector(".nozzle").innerHTML = temp(status.extruder_temp, status.extruder_target);
   card.querySelector(".bed").innerHTML = temp(status.bed_temp, status.bed_target);
@@ -87,19 +85,22 @@ function render(status) {
 
 function renderJob(card, status) {
   const job = card.querySelector(".job");
-  const active = status.state === "printing" || status.state === "paused";
+  const state = displayState(status);
+  const active = state === "printing" || state === "paused" || state === "complete";
   job.hidden = !active;
   if (!active) {
     card._thumbFilename = null;
     return;
   }
 
-  card.querySelector(".progress-bar").style.width = `${Math.round((status.progress || 0) * 100)}%`;
-  card.querySelector(".filename").textContent = status.filename || "—";
+  // Moonraker may still report <100% after completion.
+  const progress = state === "complete" ? 1 : (status.progress || 0);
+  card.querySelector(".progress-bar").style.width = `${Math.round(progress * 100)}%`;
+  card.querySelector(".filename").textContent = status.filename || "-";
   card.querySelector(".eta").textContent = eta(status.eta_seconds);
+  renderJobControls(card, status);
 
-  // Fetch once per filename, not on every status tick — the thumbnail
-  // doesn't change mid-print.
+  // Once per filename, not per tick.
   if (status.filename && status.filename !== card._thumbFilename) {
     card._thumbFilename = status.filename;
     const thumb = card.querySelector(".job-thumb");
@@ -113,7 +114,6 @@ function renderCamera(card, status) {
   if (status.camera_url && status.online) {
     toggle.hidden = false;
   } else {
-    // No camera, or the printer dropped off — hide and tear down any stream.
     toggle.hidden = true;
     card.querySelector(".camera").hidden = true;
     toggle.textContent = "Show camera";
@@ -133,7 +133,6 @@ function groupFor(name) {
   const grid = el.querySelector(".group-grid");
   const countEl = el.querySelector(".group-count");
 
-  // Remember whether this section was left open or collapsed.
   try {
     const stored = localStorage.getItem(`printdeck-group-${key}`);
     if (stored) el.open = stored === "open";
@@ -148,8 +147,7 @@ function groupFor(name) {
   return group;
 }
 
-// Alphabetical, but "Ungrouped" always sorts last — it's the catch-all, not
-// a category anyone named on purpose.
+// Alphabetical, "Ungrouped" last.
 function insertGroupSorted(el, key) {
   const before = [...groupsEl.children].find((child) => {
     if (key === "Ungrouped") return false;
@@ -162,9 +160,7 @@ function insertGroupSorted(el, key) {
 function placeInGroup(card, groupName) {
   const target = groupFor(groupName);
   const previousGrid = card.parentElement;
-  // The common case: this card was already in the right group and just had
-  // a status change (e.g. connecting -> idle) — still need to recompute
-  // the group's state breakdown, just not move anything.
+  // Usually already in the right group; still recount states.
   if (previousGrid !== target.grid) {
     target.grid.append(card);
     if (previousGrid && previousGrid.children.length === 0) {
@@ -178,9 +174,8 @@ function placeInGroup(card, groupName) {
   updateGroupCount(target);
 }
 
-// Most-actionable state first, so a glance at a big group catches problems
-// before it catches printers just sitting idle.
-const STATE_ORDER = ["error", "printing", "paused", "connecting", "idle", "offline"];
+// Most actionable first.
+const STATE_ORDER = ["error", "printing", "paused", "complete", "connecting", "idle", "offline"];
 
 function updateGroupCount(group) {
   const counts = {};
@@ -232,10 +227,7 @@ function applySearchFilter() {
 }
 
 // --- adding a printer ---------------------------------------------------
-// Needs manage_printers in practice (the button's hidden without it — see
-// body:not(.can-manage-printers) in style.css — and the API enforces it
-// regardless). The new card itself appears via the live feed's own
-// "update" event once the POST succeeds, same as any other status change.
+// The new card arrives via the live feed's "update" event.
 
 document.getElementById("add-printer").addEventListener("click", () => {
   const { overlay, body } = openModal("Add printer");
@@ -247,6 +239,22 @@ document.getElementById("add-printer").addEventListener("click", () => {
     <label class="modal-field">
       <span>IP / hostname</span>
       <input type="text" class="modal-input add-host" inputmode="decimal" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="modal-field">
+      <span>Moonraker port</span>
+      <input type="number" class="modal-input add-port" min="1" max="65535" step="1" inputmode="numeric" autocomplete="off" value="7125">
+    </label>
+    <label class="modal-field">
+      <span>API key (optional)</span>
+      <input type="password" class="modal-input add-api-key" autocomplete="off" spellcheck="false" placeholder="Only if Moonraker requires one">
+    </label>
+    <label class="modal-field modal-field-check">
+      <input type="checkbox" class="add-tls">
+      <span>Connect over HTTPS/WSS</span>
+    </label>
+    <label class="modal-field modal-field-check">
+      <input type="checkbox" class="add-creality-light">
+      <span>Creality chamber light (K1 stock firmware, port 9999)</span>
     </label>
     <label class="modal-field">
       <span>Camera URL (optional)</span>
@@ -264,6 +272,10 @@ document.getElementById("add-printer").addEventListener("click", () => {
   `;
   const nameInput = body.querySelector(".add-name");
   const hostInput = body.querySelector(".add-host");
+  const portInput = body.querySelector(".add-port");
+  const apiKeyInput = body.querySelector(".add-api-key");
+  const tlsInput = body.querySelector(".add-tls");
+  const crealityLightInput = body.querySelector(".add-creality-light");
   const cameraInput = body.querySelector(".add-camera");
   const groupInput = body.querySelector(".add-group");
   const errorEl = body.querySelector(".add-printer-error");
@@ -285,21 +297,20 @@ document.getElementById("add-printer").addEventListener("click", () => {
     }
     confirmBtn.disabled = true;
     try {
-      const res = await fetch("/api/printers", {
+      await api("/api/printers", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        json: {
           name,
           host,
+          moonraker_port: Number(portInput.value) || 7125,
+          api_key: apiKeyInput.value.trim(),
+          tls: tlsInput.checked,
+          creality_light: crealityLightInput.checked,
           camera_url: cameraInput.value.trim(),
           group: groupInput.value.trim(),
-        }),
+        },
       });
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({}));
-        throw new Error(errBody.detail || `error ${res.status}`);
-      }
-      close();  // success — the new card appears via the live feed
+      close();  // the new card appears via the live feed
     } catch (err) {
       errorEl.textContent = err.message;
       errorEl.hidden = false;
@@ -309,7 +320,8 @@ document.getElementById("add-printer").addEventListener("click", () => {
 
   const onKey = (event) => {
     if (event.key === "Escape") close();
-    if (event.key === "Enter") submit();
+    // Text fields only; Enter on a button must click that button.
+    if (event.key === "Enter" && event.target.matches("input:not([type=checkbox])")) submit();
   };
 
   overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); });
@@ -353,7 +365,6 @@ function connect() {
   socket.addEventListener("error", () => socket.close());
 }
 
-// While the socket is down, keep the cards roughly current over plain REST.
 function startPolling() {
   if (pollTimer) return;
   const tick = async () => {
@@ -363,9 +374,7 @@ function startPolling() {
       const printers = await res.json();
       const seen = new Set(printers.map((p) => p.id));
       printers.forEach(render);
-      // A printer removed by someone else while this tab's WS was down
-      // otherwise never disappears here — the snapshot just stops
-      // mentioning it, nothing tells this tab to drop the card.
+      // Polling has no "removed" event, so drop cards the snapshot stopped mentioning.
       for (const id of [...cards.keys()]) {
         if (!seen.has(id)) removeCard(id);
       }

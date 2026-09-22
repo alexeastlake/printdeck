@@ -1,14 +1,9 @@
-"""The printer-facing half of PrintDeck, all in one place:
+"""Printer side: one websocket per printer, Moonraker objects → PrinterStatus,
+and the manager that owns the tasks and fans updates out to browsers.
 
-  MoonrakerClient — one websocket per printer: subscribe once, merge partial
-                    updates, yield the full picture each time.
-  normalize()     — turn Moonraker's raw objects into our flat PrinterStatus.
-  PrinterManager  — one asyncio task per printer: connect, reconnect with
-                    backoff, and fan status out to the browser.
-
-Moonraker speaks JSON-RPC 2.0 over ws://host:7125/websocket and only sends the
-*changed* fields, so the client keeps a running merge.
-Docs: https://moonraker.readthedocs.io/en/latest/web_api/
+Moonraker is JSON-RPC over ws://host:7125/websocket and only sends changed
+fields, so the client keeps a running merge.
+https://moonraker.readthedocs.io/en/latest/web_api/
 """
 
 from __future__ import annotations
@@ -16,77 +11,85 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import websockets
 
+from . import creality
 from .config import save_printers
-from .models import FanStatus, PrinterConfig, PrinterStatus
+from .models import FanStatus, LightStatus, PrinterConfig, PrinterStatus
 
 log = logging.getLogger("printdeck.moonraker")
 
 
-# --- one printer's Moonraker connection ------------------------------------
-
-# If Moonraker goes this long without sending anything, re-subscribe. Klipper
-# can restart underneath a still-open websocket and silently drop our
-# subscription — no error, just no more updates — so we'd otherwise show stale
-# values forever. While the printer sits idle at a stable temperature this is
-# just a cheap periodic refresh; during a print, updates arrive constantly and
-# the timeout never fires.
+# Klipper can restart under an open websocket and silently drop our
+# subscription. If nothing arrives for this long, re-subscribe; the reply is
+# a full snapshot. During a print updates are constant, so this never fires.
 RESUBSCRIBE_AFTER = 20.0
 
-# The Klipper objects the dashboard needs. `null` means "subscribe to all
-# fields of this object". Add more here as the dashboard grows.
+# None = all fields. Extra fans are discovered per connection.
 SUBSCRIBED_OBJECTS = {
-    "webhooks": None,        # klipper ready / shutdown / error
-    "print_stats": None,     # state, filename, duration, message
-    "display_status": None,  # progress (0..1)
+    "webhooks": None,
+    "print_stats": None,
+    "display_status": None,
     "virtual_sdcard": None,  # progress fallback
-    "heater_bed": None,      # bed temperature + target
-    "extruder": None,        # nozzle temperature + target
-    "toolhead": None,        # position, homed axes — the detail page's jog controls
-    "fan": None,             # the primary part-cooling fan; other fans this
-                             # printer has are discovered per-connection, see
-                             # MoonrakerClient._objects_to_subscribe
+    "heater_bed": None,
+    "extruder": None,
+    "toolhead": None,
+    "fan": None,
 }
+
+# Klipper has no "light" type. LED strips are unambiguous; an output_pin is
+# only a light if its name says so (the K1's chamber light is [output_pin LED]).
+_LED_PREFIXES = ("led ", "neopixel ", "dotstar ", "pca9632 ", "pca9533 ")
+_LIGHT_PIN_RE = re.compile(r"(led|light|lamp|chamber|case)", re.IGNORECASE)
+
+
+def is_light_object(name: str) -> bool:
+    if name.startswith(_LED_PREFIXES):
+        return True
+    return name.startswith("output_pin ") and bool(_LIGHT_PIN_RE.search(name.split(" ", 1)[1]))
+
+
+# Requests are sequential, so ids only need to be distinct.
+_ID_SUBSCRIBE = 1
+_ID_OBJECT_LIST = 2
+_ID_CONFIG_QUERY = 3
 
 
 class MoonrakerClient:
-    def __init__(self, host: str, port: int = 7125) -> None:
-        self.host = host
-        self.port = port
+    def __init__(self, config: PrinterConfig) -> None:
+        self.config = config
         self._objects: dict[str, dict] = {}
-
-    @property
-    def ws_url(self) -> str:
-        return f"ws://{self.host}:{self.port}/websocket"
+        self.limits: dict[str, float] = {}  # heater max_temp, see _read_limits
+        self.pin_settings: dict[str, dict] = {}  # output_pin name -> {pwm, scale}, see _read_limits
 
     async def stream(self) -> AsyncIterator[dict[str, dict]]:
-        """Connect, subscribe, and yield the merged object state on every update.
-
-        Raises on connection loss so the caller can decide how to reconnect.
-        """
+        """Yield the merged object state on every update. Raises on disconnect."""
         self._objects = {}
-        # open_timeout covers DNS resolution too, not just the TCP/WS
-        # handshake — the library's 10s default can be too tight for a
-        # ".local" mDNS hostname on Windows, where a cold lookup can
-        # legitimately take close to that long on its own (mDNS resolves
-        # near-instantly on macOS/Linux; Windows is slower to warm up).
-        # Aborting at 10s just means the next retry starts DNS over from
-        # scratch instead of letting a slow-but-working lookup finish.
+        self.limits = {}
+        self.pin_settings = {}
+        # open_timeout includes DNS. A cold ".local" lookup on Windows can
+        # take close to 10s, so the library default was too tight.
         async with websockets.connect(
-            self.ws_url, open_timeout=15, ping_interval=20, ping_timeout=20, max_size=None
+            self.config.ws_url,
+            additional_headers=self.config.auth_headers,
+            open_timeout=15,
+            ping_interval=20,
+            ping_timeout=20,
+            max_size=None,
         ) as ws:
-            log.info("connected to %s", self.ws_url)
+            log.info("connected to %s", self.config.ws_url)
             objects = await self._objects_to_subscribe(ws)
+            await self._read_limits(ws)
             await ws.send(json.dumps(self._subscribe_request(objects)))
             while True:
                 try:
                     raw = await asyncio.wait_for(ws.recv(), timeout=RESUBSCRIBE_AFTER)
-                except asyncio.TimeoutError:
-                    # Gone quiet — our subscription may have been dropped. Renew
-                    # it; the reply carries a full snapshot that catches us up.
+                except TimeoutError:
                     await ws.send(json.dumps(self._subscribe_request(objects)))
                     continue
                 changed = self._extract_status(json.loads(raw))
@@ -95,30 +98,56 @@ class MoonrakerClient:
                 self._merge(changed)
                 yield self._objects
 
+    @staticmethod
+    async def _rpc(ws, method: str, params: dict | None, request_id: int, timeout: float = 5) -> dict:
+        # Push notifications can interleave; read until our id comes back.
+        message: dict = {"jsonrpc": "2.0", "method": method, "id": request_id}
+        if params is not None:
+            message["params"] = params
+        await ws.send(json.dumps(message))
+        async with asyncio.timeout(timeout):
+            while True:
+                msg = json.loads(await ws.recv())
+                if msg.get("id") == request_id:
+                    if "error" in msg:
+                        raise RuntimeError(msg["error"].get("message", method))
+                    return msg.get("result", {})
+
     async def _objects_to_subscribe(self, ws) -> dict[str, None]:
-        """The fixed set this app always wants, plus whichever fan objects
-        this specific printer happens to have configured. Klipper has no
-        fixed list of fan names — a printer can have any number of
-        `[fan_generic <name>]` sections beyond the one default `[fan]` — so
-        we have to ask what's actually there rather than guess."""
+        # Klipper has no fixed fan list (any number of [fan_generic X]), so ask.
         objects = dict(SUBSCRIBED_OBJECTS)
         try:
-            await ws.send(json.dumps(
-                {"jsonrpc": "2.0", "method": "printer.objects.list", "id": 2}
-            ))
-            async with asyncio.timeout(5):
-                while True:
-                    msg = json.loads(await ws.recv())
-                    if msg.get("id") != 2:
-                        continue  # a push notification arrived first; keep waiting
-                    for name in msg.get("result", {}).get("objects", []):
-                        if name == "fan" or name.startswith("fan_generic "):
-                            objects[name] = None
-                    break
+            result = await self._rpc(ws, "printer.objects.list", None, _ID_OBJECT_LIST)
+            for name in result.get("objects", []):
+                if name == "fan" or name.startswith("fan_generic ") or is_light_object(name):
+                    objects[name] = None
         except Exception as exc:
-            # Not fatal — we still get the one fan we always subscribe to.
-            log.info("couldn't list extra fan objects for %s: %s", self.host, exc)
+            log.info("couldn't list extra fan objects for %s: %s", self.config.id, exc)
         return objects
+
+    async def _read_limits(self, ws) -> None:
+        # Only so the UI can cap its inputs at the real max_temp; Klipper
+        # enforces it regardless. One-off query: a config change restarts
+        # Klipper, which reconnects us.
+        try:
+            result = await self._rpc(
+                ws, "printer.objects.query",
+                {"objects": {"configfile": ["settings"]}}, _ID_CONFIG_QUERY,
+            )
+            settings = result.get("status", {}).get("configfile", {}).get("settings", {})
+            for section, key in (("extruder", "extruder_max_temp"), ("heater_bed", "bed_max_temp")):
+                value = settings.get(section, {}).get("max_temp")
+                if isinstance(value, (int, float)):
+                    self.limits[key] = float(value)
+            # Whether a light pin can dim, and what SET_PIN's full-on value is.
+            for section, cfg in settings.items():
+                if section.startswith("output_pin ") and isinstance(cfg, dict):
+                    self.pin_settings[section] = {
+                        "pwm": bool(cfg.get("pwm", False)),
+                        "scale": float(cfg.get("scale", 1.0) or 1.0),
+                    }
+        except Exception as exc:
+            log.info("couldn't read heater limits for %s: %s", self.config.id, exc)
 
     @staticmethod
     def _subscribe_request(objects: dict[str, None]) -> dict:
@@ -126,18 +155,16 @@ class MoonrakerClient:
             "jsonrpc": "2.0",
             "method": "printer.objects.subscribe",
             "params": {"objects": objects},
-            "id": 1,
+            "id": _ID_SUBSCRIBE,
         }
 
     @staticmethod
     def _extract_status(msg: dict) -> dict | None:
-        """Pull the status payload out of either the subscribe reply or a
-        push notification; ignore everything else Moonraker chatters about."""
-        # Reply to our subscribe call: {"result": {"status": {...}}}
+        # Subscribe reply: {"result": {"status": {...}}}
         result = msg.get("result")
         if isinstance(result, dict) and "status" in result:
             return result["status"]
-        # Push update: {"method": "notify_status_update", "params": [{...}, time]}
+        # Push: {"method": "notify_status_update", "params": [{...}, eventtime]}
         if msg.get("method") == "notify_status_update":
             params = msg.get("params") or [{}]
             return params[0]
@@ -148,21 +175,14 @@ class MoonrakerClient:
             self._objects.setdefault(obj_name, {}).update(fields)
 
 
-# --- raw Moonraker objects -> our flat PrinterStatus -----------------------
+# --- Moonraker objects -> PrinterStatus ------------------------------------
 
 def _extract_fans(objects: dict[str, dict]) -> list[FanStatus]:
-    """Every fan-like object we're subscribed to — the primary `fan` plus
-    whichever `fan_generic <name>` objects this printer has configured (see
-    MoonrakerClient._objects_to_subscribe). Order is whatever dict iteration
-    gives us, which is insertion order — primary fan first, since it's
-    always in SUBSCRIBED_OBJECTS before any discovered ones get added."""
+    # Insertion order: "fan" is in SUBSCRIBED_OBJECTS, so it comes first.
     fans = []
     for name, data in objects.items():
         if name == "fan":
-            # Klipper's bare [fan] section has no name of its own — it's
-            # always exactly one thing, the part-cooling fan. "Part Fan"
-            # matches how Fluidd/Mainsail label it, and reads better next to
-            # properly-named fan_generic entries than a bare "Fan" would.
+            # [fan] has no name of its own; "Part Fan" matches Mainsail/Fluidd.
             fans.append(FanStatus(id="fan", name="Part Fan", speed=data.get("speed", 0.0)))
         elif name.startswith("fan_generic "):
             fans.append(FanStatus(
@@ -173,14 +193,58 @@ def _extract_fans(objects: dict[str, dict]) -> list[FanStatus]:
     return fans
 
 
+def _extract_lights(objects: dict[str, dict], pin_settings: dict[str, dict]) -> list[LightStatus]:
+    lights = []
+    for name, data in objects.items():
+        if not is_light_object(name):
+            continue
+        kind, label = name.split(" ", 1)
+        if kind == "output_pin":
+            cfg = pin_settings.get(name, {})
+            scale = cfg.get("scale", 1.0) or 1.0
+            lights.append(LightStatus(
+                id=name, name=_humanize(label), kind="pin",
+                value=min(1.0, max(0.0, float(data.get("value") or 0.0) / scale)),
+                dimmable=cfg.get("pwm", False), scale=scale,
+            ))
+        else:
+            # color_data is a list of [r, g, b(, w)] per pixel; brightness is the brightest channel.
+            pixels = data.get("color_data") or []
+            first = pixels[0] if pixels else []
+            lights.append(LightStatus(
+                id=name, name=_humanize(label), kind="led",
+                value=float(max(first)) if first else 0.0,
+                dimmable=True, white=len(first) >= 4,
+            ))
+    return lights
+
+
 def _humanize(config_name: str) -> str:
-    """Klipper section names are snake_case (`model_fan`, `chassis-fan`) —
-    turn that into a normal display label ("Model Fan") instead of showing
-    the raw config identifier verbatim."""
+    """model_fan -> "Model Fan"."""
     return config_name.replace("_", " ").replace("-", " ").title()
 
 
-def normalize(config: PrinterConfig, objects: dict[str, dict]) -> PrinterStatus:
+def _connection_fields(config: PrinterConfig) -> dict:
+    return {
+        "id": config.id,
+        "name": config.name,
+        "host": config.host,
+        "moonraker_port": config.moonraker_port,
+        "tls": config.tls,
+        "has_api_key": bool(config.api_key),
+        "creality_light": config.creality_light,
+        "camera_url": config.camera_url,
+        "group": config.group,
+    }
+
+
+def normalize(
+    config: PrinterConfig,
+    objects: dict[str, dict],
+    limits: dict[str, float] | None = None,
+    pin_settings: dict[str, dict] | None = None,
+) -> PrinterStatus:
+    limits = limits or {}
     webhooks = objects.get("webhooks", {})
     print_stats = objects.get("print_stats", {})
     display = objects.get("display_status", {})
@@ -195,107 +259,90 @@ def normalize(config: PrinterConfig, objects: dict[str, dict]) -> PrinterStatus:
 
     print_duration = print_stats.get("print_duration", 0.0) or 0.0
     position = toolhead.get("position") or [0.0, 0.0, 0.0]
-    print_info = print_stats.get("info") or {}
-    # webhooks.state_message is Klipper's own status line — for a healthy
-    # printer that's just "Printer is ready". It's always shown labeled as
-    # Status on the detail page (klipper_status), but only promoted to the
-    # attention-grabbing `message` field when Klipper isn't in its normal
-    # ready state (startup/shutdown/error), where it's actually noteworthy.
+    # state_message is "Printer is ready" when healthy; only worth promoting
+    # to the alert line when Klipper isn't ready.
     klipper_status = webhooks.get("state_message") or None
     webhooks_message = klipper_status if webhooks.get("state") != "ready" else None
 
     return PrinterStatus(
-        id=config.id,
-        name=config.name,
-        host=config.host,
+        **_connection_fields(config),
         online=True,
         state=_derive_state(webhooks, print_stats),
-        extruder_temp=round(extruder.get("temperature", 0.0), 1),
-        extruder_target=extruder.get("target", 0.0),
-        bed_temp=round(bed.get("temperature", 0.0), 1),
-        bed_target=bed.get("target", 0.0),
+        extruder_temp=round(extruder.get("temperature") or 0.0, 1),
+        extruder_target=extruder.get("target") or 0.0,
+        bed_temp=round(bed.get("temperature") or 0.0, 1),
+        bed_target=bed.get("target") or 0.0,
+        extruder_max_temp=limits.get("extruder_max_temp"),
+        bed_max_temp=limits.get("bed_max_temp"),
         fans=_extract_fans(objects),
-        progress=progress,
+        lights=_extract_lights(objects, pin_settings or {}),
+        progress=progress or 0.0,
         filename=print_stats.get("filename") or None,
         print_duration=print_duration,
-        eta_seconds=_estimate_eta(print_duration, progress),
+        eta_seconds=_estimate_eta(print_duration, progress or 0.0),
         filament_used=print_stats.get("filament_used", 0.0) or 0.0,
-        current_layer=print_info.get("current_layer"),
-        total_layer=print_info.get("total_layer"),
         x=position[0],
         y=position[1],
         z=position[2],
         homed_axes=toolhead.get("homed_axes", ""),
         message=print_stats.get("message") or webhooks_message or None,
         klipper_status=klipper_status,
-        camera_url=config.camera_url,
-        group=config.group,
     )
 
 
 def offline_status(config: PrinterConfig) -> PrinterStatus:
-    """What we report once a connection attempt has actually failed."""
-    return PrinterStatus(
-        id=config.id,
-        name=config.name,
-        host=config.host,
-        online=False,
-        state="offline",
-        camera_url=config.camera_url,
-        group=config.group,
-    )
+    return PrinterStatus(**_connection_fields(config), online=False, state="offline")
 
 
 def connecting_status(config: PrinterConfig) -> PrinterStatus:
-    """What we report while a connection attempt is in flight but hasn't
-    resolved either way yet — right after server startup, and at the start
-    of every reconnect attempt. Distinct from offline_status: "offline"
-    means we tried and it's actually unreachable, this just means we don't
-    know yet. Without this, a printer flashes "offline" for a moment on
-    every startup even though it's fine — just not yet checked."""
-    return PrinterStatus(
-        id=config.id,
-        name=config.name,
-        host=config.host,
-        online=False,
-        state="connecting",
-        camera_url=config.camera_url,
-        group=config.group,
-    )
+    # "offline" means we tried and failed; this means we haven't heard back
+    # yet. Without it every printer flashes offline on startup.
+    return PrinterStatus(**_connection_fields(config), online=False, state="connecting")
 
 
 def _derive_state(webhooks: dict, print_stats: dict) -> str:
-    klipper = webhooks.get("state")  # ready, startup, shutdown, error
+    klipper = webhooks.get("state")  # ready | startup | shutdown | error
     if klipper in ("shutdown", "error"):
         return "error"
 
-    job = print_stats.get("state")  # standby, printing, paused, complete, error
+    job = print_stats.get("state")  # standby | printing | paused | complete | cancelled | error
     if job == "printing":
         return "printing"
     if job == "paused":
         return "paused"
     if job == "error":
         return "error"
+    if job == "complete":
+        # Sticky: Klipper reports this until the next print (or SDCARD_RESET_FILE).
+        return "complete"
     return "idle"
 
 
 def _estimate_eta(print_duration: float, progress: float) -> float | None:
-    """A rough ETA from elapsed time and progress fraction. Good enough for a
-    glanceable dashboard; we can swap in slicer time estimates later."""
+    # Fallback only; the detail page prefers the slicer's estimate once loaded.
     if progress and progress > 0.01:
         total = print_duration / progress
         return max(total - print_duration, 0.0)
     return None
 
 
-# --- one task per printer, fanning status out to the page ------------------
+# --- manager ---------------------------------------------------------------
 
 RECONNECT_MIN = 2.0
 RECONNECT_MAX = 30.0
 
+# Per browser connection. A tab that stops draining (backgrounded phone,
+# half-open TCP) would otherwise grow forever. Every message is a full
+# snapshot, so dropping the oldest loses nothing.
+SUBSCRIBER_QUEUE_SIZE = 256
+
+# Changing any of these reconnects; anything else just repaints the card.
+_CONNECTION_KEYS = ("host", "moonraker_port", "api_key", "tls", "creality_light")
+
 
 class PrinterManager:
-    def __init__(self, configs: list[PrinterConfig]) -> None:
+    def __init__(self, configs: list[PrinterConfig], printers_file: Path) -> None:
+        self._printers_file = printers_file
         self._configs = configs
         self._by_id: dict[str, PrinterConfig] = {c.id: c for c in configs}
         self._status: dict[str, PrinterStatus] = {
@@ -303,6 +350,10 @@ class PrinterManager:
         }
         self._tasks: dict[str, asyncio.Task] = {}
         self._subscribers: set[asyncio.Queue[dict]] = set()
+        self._completed_at: dict[str, float] = {}
+        # Creality light service, only for printers that opt in (see creality.py).
+        self._light_tasks: dict[str, asyncio.Task] = {}
+        self._light_clients: dict[str, creality.CrealityLightClient] = {}
 
     # --- lifecycle -------------------------------------------------------
 
@@ -311,16 +362,52 @@ class PrinterManager:
             self._spawn(c)
 
     async def stop(self) -> None:
-        tasks = list(self._tasks.values())
+        tasks = list(self._tasks.values()) + list(self._light_tasks.values())
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
+        self._light_tasks.clear()
+        self._light_clients.clear()
 
     def _spawn(self, config: PrinterConfig) -> None:
         self._tasks[config.id] = asyncio.create_task(
             self._run(config), name=f"printer:{config.id}"
         )
+        if config.creality_light:
+            client = creality.CrealityLightClient(
+                config, lambda state, pid=config.id: self._on_creality_light(pid, state)
+            )
+            self._light_clients[config.id] = client
+            self._light_tasks[config.id] = asyncio.create_task(client.run(), name=f"light:{config.id}")
+
+    async def _despawn(self, printer_id: str) -> None:
+        tasks = [t for t in (self._tasks.pop(printer_id, None), self._light_tasks.pop(printer_id, None)) if t]
+        self._light_clients.pop(printer_id, None)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    # --- Creality light --------------------------------------------------
+
+    def _with_creality_light(self, status: PrinterStatus) -> PrinterStatus:
+        client = self._light_clients.get(status.id)
+        lights = [light for light in status.lights if light.id != creality.LIGHT_ID]
+        if client is not None and client.state is not None and status.online:
+            lights.append(creality.light_status(client.state))
+        status.lights = lights
+        return status
+
+    def _on_creality_light(self, printer_id: str, state: bool | None) -> None:
+        current = self._status.get(printer_id)
+        if current is not None and current.online:
+            self._publish(self._with_creality_light(current.model_copy()))
+
+    async def set_creality_light(self, printer_id: str, on: bool) -> None:
+        client = self._light_clients.get(printer_id)
+        if client is None:
+            raise KeyError(printer_id)
+        await client.set(on)
 
     # --- reads -----------------------------------------------------------
 
@@ -333,84 +420,51 @@ class PrinterManager:
     def config(self, printer_id: str) -> PrinterConfig | None:
         return self._by_id.get(printer_id)
 
-    # --- runtime edits ---------------------------------------------------
+    def _save(self) -> None:
+        save_printers(self._printers_file, self._configs)
 
-    async def update_printer(
-        self,
-        printer_id: str,
-        *,
-        name: str,
-        host: str,
-        camera_url: str | None,
-        group: str,
-    ) -> PrinterStatus:
-        """Edit a printer's settings and apply them in place — no server restart.
-        Persists the change so it survives the next boot. Only a changed host
-        forces a reconnect; renaming/regrouping just refreshes the card."""
+    # --- edits -----------------------------------------------------------
+
+    async def update_printer(self, printer_id: str, **fields) -> PrinterStatus:
         old = self._by_id[printer_id]
-        new = old.model_copy(
-            update={"name": name, "host": host, "camera_url": camera_url, "group": group}
-        )
+        new = old.model_copy(update=fields)
         self._by_id[printer_id] = new
         self._configs = [new if c.id == printer_id else c for c in self._configs]
-        save_printers(self._configs)
+        self._save()
 
-        if new.host != old.host:
-            # Tear the old connection down before bringing the new one up, so we
-            # never have two tasks talking for the same printer.
-            task = self._tasks.pop(printer_id, None)
-            if task:
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-            self._publish(offline_status(new))  # reflect the change immediately
+        if any(getattr(new, key) != getattr(old, key) for key in _CONNECTION_KEYS):
+            # Old task down before the new one up, never two per printer.
+            await self._despawn(printer_id)
+            self._publish(offline_status(new))
             self._spawn(new)
         else:
-            # Same address — no need to drop the live connection. Repaint the
-            # card now; the running task already reads the live config.
             current = self._status[printer_id]
-            self._publish(
-                current.model_copy(
-                    update={"name": new.name, "camera_url": new.camera_url, "group": new.group}
-                )
-            )
+            self._publish(current.model_copy(update=_connection_fields(new)))
         return self._status[printer_id]
 
-    # --- adding / removing printers ---------------------------------------
-
-    async def add_printer(
-        self, *, id: str, name: str, host: str, camera_url: str | None, group: str
-    ) -> PrinterStatus:
-        """Add a new printer at runtime — persists it and starts connecting
-        immediately, no server restart needed."""
-        config = PrinterConfig(id=id, name=name, host=host, camera_url=camera_url, group=group)
+    async def add_printer(self, config: PrinterConfig) -> PrinterStatus:
         self._configs.append(config)
-        self._by_id[id] = config
-        save_printers(self._configs)
+        self._by_id[config.id] = config
+        self._save()
         self._spawn(config)
         status = connecting_status(config)
         self._publish(status)
         return status
 
     async def remove_printer(self, printer_id: str) -> None:
-        """Remove a printer at runtime — stop talking to it, forget it, and
-        tell connected browsers to drop its card. Just stops PrintDeck from
-        managing it; doesn't touch the printer itself."""
         if printer_id not in self._by_id:
             raise KeyError(printer_id)
-        task = self._tasks.pop(printer_id, None)
-        if task:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        await self._despawn(printer_id)
         del self._by_id[printer_id]
         self._configs = [c for c in self._configs if c.id != printer_id]
         self._status.pop(printer_id, None)
-        save_printers(self._configs)
+        self._save()
         self._broadcast({"type": "removed", "id": printer_id})
 
-    # --- frontend fan-out ------------------------------------------------
+    # --- fan-out ---------------------------------------------------------
 
     def subscribe(self) -> asyncio.Queue[dict]:
-        queue: asyncio.Queue[dict] = asyncio.Queue()
+        queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=SUBSCRIBER_QUEUE_SIZE)
         self._subscribers.add(queue)
         return queue
 
@@ -421,27 +475,53 @@ class PrinterManager:
         self._status[status.id] = status
         self._broadcast({"type": "update", "printer": status.model_dump()})
 
+    def _track_completion(self, status: PrinterStatus) -> PrinterStatus:
+        # Klipper has no end timestamp, so "finished N min ago" comes from
+        # noticing the printing→complete transition ourselves. Keyed by
+        # printer so it survives reconnects; gone once the state moves on.
+        if status.state != "complete":
+            self._completed_at.pop(status.id, None)
+            return status
+        previous = self._status.get(status.id)
+        if previous is not None and previous.state in ("printing", "paused"):
+            self._completed_at[status.id] = time.time()
+        status.completed_at = self._completed_at.get(status.id)
+        return status
+
     def _broadcast(self, message: dict) -> None:
         for queue in self._subscribers:
+            if queue.full():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
             queue.put_nowait(message)
 
-    # --- per-printer connection loop -------------------------------------
+    # --- per-printer loop ------------------------------------------------
 
     async def _run(self, config: PrinterConfig) -> None:
-        # The host is fixed for this task (a host change respawns the task), but
-        # name/camera edits land in self._by_id, so read it live when publishing.
-        client = MoonrakerClient(config.host, config.moonraker_port)
+        # Connection details are fixed for this task (a change respawns it);
+        # name/camera edits land in self._by_id, so read that when publishing.
+        client = MoonrakerClient(config)
         backoff = RECONNECT_MIN
+        # First failure INFO, repeats DEBUG, so an unplugged printer doesn't spam the log every 30s.
+        was_reachable = True
         while True:
             self._publish(connecting_status(self._by_id[config.id]))
             try:
                 async for objects in client.stream():
-                    self._publish(normalize(self._by_id[config.id], objects))
-                    backoff = RECONNECT_MIN  # healthy connection, reset
+                    status = normalize(self._by_id[config.id], objects, client.limits, client.pin_settings)
+                    self._publish(self._with_creality_light(self._track_completion(status)))
+                    backoff = RECONNECT_MIN
+                    was_reachable = True
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # connection refused, timeout, reset, ...
-                log.info("printer %s unreachable: %s", config.id, exc)
+            except Exception as exc:
+                log.log(
+                    logging.INFO if was_reachable else logging.DEBUG,
+                    "printer %s unreachable: %s", config.id, exc,
+                )
+                was_reachable = False
 
             self._publish(offline_status(self._by_id[config.id]))
             await asyncio.sleep(backoff)

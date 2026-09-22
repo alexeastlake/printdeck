@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrintDeck - Roles</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/theme-init.js"></script>
+</head>
+<body>
+  <header class="topbar"></header>
+
+  <main class="users-main">
+    <h2 class="users-title">Roles</h2>
+    <p class="users-sub">A role is a name plus a set of permissions. Assign roles to accounts on the <a href="/users">Users page</a>. There's always at least one user who can manage users and roles; PrintDeck won't let you remove the last one. You also can't change the permissions of the role you're signed in with; that has to be done from an account with a different role.</p>
+
+    <form class="roles-add" autocomplete="off">
+      <label class="login-field roles-field-name">
+        <span>Name</span>
+        <input class="add-role-name" type="text" autocomplete="off" required maxlength="64">
+      </label>
+      <fieldset class="roles-permissions add-permissions">
+        <legend>Permissions</legend>
+      </fieldset>
+      <button type="submit" class="login-btn roles-add-btn">Add role</button>
+    </form>
+    <p class="roles-add-error login-error" role="alert" hidden></p>
+
+    <div class="users-table roles-table">
+      <div class="users-table-head roles-table-head">
+        <span>Name</span>
+        <span>Permissions</span>
+        <span></span>
+      </div>
+      <ul class="users-list roles-list"></ul>
+    </div>
+    <p class="users-status roles-status" hidden></p>
+  </main>
+
+  <template id="role-row-template">
+    <li class="user-row role-row">
+      <span class="role-name"></span>
+      <span class="role-permissions"></span>
+      <span class="user-actions">
+        <button type="button" class="role-edit">Edit</button>
+        <button type="button" class="user-delete role-delete" title="Delete" aria-label="Delete">🗑</button>
+      </span>
+    </li>
+  </template>
+
+  <script src="/static/shared.js"></script>
+  <script src="/static/roles.js"></script>
+</body>
+</html>

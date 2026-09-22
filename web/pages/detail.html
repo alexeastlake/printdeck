@@ -3,28 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script>try{var t=localStorage.getItem("printdeck-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}</script>
   <title>PrintDeck</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233a6ea5'/%3E%3Crect x='8' y='9' width='16' height='3.2' rx='1.6' fill='white'/%3E%3Crect x='8' y='14.4' width='16' height='3.2' rx='1.6' fill='white'/%3E%3Crect x='8' y='19.8' width='16' height='3.2' rx='1.6' fill='white'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/theme-init.js"></script>
 </head>
 <body>
-  <header class="topbar">
-    <h1><a href="/">PrintDeck</a></h1>
-    <span id="conn" class="conn" data-state="connecting">Connecting to server…</span>
-    <div class="header-actions">
-      <div class="dropdown">
-        <button id="settings-toggle" class="icon-btn" type="button"
-                aria-haspopup="true" aria-expanded="false"
-                title="Settings" aria-label="Settings">⚙</button>
-      </div>
-      <div class="dropdown">
-        <button id="account-toggle" class="icon-btn account-toggle" type="button" hidden
-                aria-haspopup="true" aria-expanded="false"
-                title="Account" aria-label="Account"></button>
-      </div>
-    </div>
-  </header>
+  <header class="topbar" data-conn></header>
 
   <main class="detail-main">
     <article id="detail-card" class="detail-page" hidden>
@@ -40,8 +25,16 @@
 
       <p class="klipper-status" hidden><span class="klipper-status-label">Status</span> <span class="klipper-status-value"></span></p>
 
+      <!-- Lifetime counters from Moonraker's history totals, not the list below. -->
+      <div class="printer-info lifetime-stats" hidden>
+        <span class="printer-info-item">Total prints <b class="lifetime-prints"></b></span>
+        <span class="printer-info-item">Print time <b class="lifetime-time"></b></span>
+        <span class="printer-info-item">Filament <b class="lifetime-filament"></b></span>
+        <span class="printer-info-item lifetime-longest-item" hidden>Longest print <b class="lifetime-longest"></b></span>
+      </div>
+
       <div class="printer-info">
-        <span class="printer-info-item">IP/hostname <b class="printer-info-host"></b></span>
+        <span class="printer-info-item">Moonraker <b class="printer-info-host"></b></span>
       </div>
 
       <form class="editor" hidden autocomplete="off">
@@ -54,6 +47,24 @@
           <span>IP/hostname</span>
           <input class="host-input" type="text" inputmode="decimal" autocomplete="off"
                  spellcheck="false" placeholder="192.168.1.50">
+        </label>
+        <label class="editor-field">
+          <span>Moonraker port</span>
+          <input class="port-input" type="number" min="1" max="65535" step="1" inputmode="numeric"
+                 autocomplete="off" placeholder="7125">
+        </label>
+        <label class="editor-field">
+          <span>API key (optional)</span>
+          <input class="api-key-input" type="password" autocomplete="off" spellcheck="false"
+                 placeholder="Only if Moonraker requires one">
+        </label>
+        <label class="editor-field editor-field-check">
+          <input class="tls-input" type="checkbox">
+          <span>Connect over HTTPS/WSS</span>
+        </label>
+        <label class="editor-field editor-field-check">
+          <input class="creality-light-input" type="checkbox">
+          <span>Creality chamber light (K1 stock firmware, port 9999)</span>
         </label>
         <label class="editor-field">
           <span>Camera URL</span>
@@ -92,9 +103,15 @@
               <span class="filename"></span>
               <span class="eta"></span>
             </div>
+            <div class="job-actions">
+              <button class="job-pause job-control" type="button" hidden>Pause</button>
+              <button class="job-resume job-control" type="button" hidden>Resume</button>
+              <button class="job-cancel job-control danger" type="button" hidden>Cancel</button>
+              <span class="job-finished" hidden></span>
+              <button class="job-dismiss" type="button" hidden>Dismiss</button>
+            </div>
             <div class="job-stats">
-              <span class="job-stat job-stat-filament" hidden>Filament Length <b class="job-filament"></b></span>
-              <span class="job-stat job-stat-weight" hidden>Filament Weight <b class="job-weight"></b></span>
+              <span class="job-stat job-stat-filament" hidden>Filament <b class="job-filament"></b></span>
               <span class="job-stat job-stat-filament-type" hidden>Filament Type <b class="job-filament-type"></b></span>
               <span class="job-stat job-stat-layer-count" hidden>Layer Count <b class="job-layer-count"></b></span>
               <span class="job-stat job-stat-layer-height" hidden>Layer Height <b class="job-layer-height"></b></span>
@@ -103,21 +120,19 @@
             </div>
           </div>
         </div>
+        <p class="job-error" role="alert" hidden></p>
       </div>
 
       <p class="detail-message" hidden></p>
 
       <div class="camera detail-camera" hidden>
-        <video class="cam-frame" title="Printer camera — click for fullscreen"
+        <video class="cam-frame" title="Printer camera. Click for fullscreen"
                muted autoplay playsinline></video>
         <p class="cam-status" role="status" hidden></p>
       </div>
       <p class="printer-info-item printer-info-camera-item" hidden>Camera URL <b class="printer-info-camera"></b></p>
 
-      <!-- Direct printer control: heaters, fan, toolhead jog. Sends G-code
-           through the relay in app/routes.py. Each block's own recent
-           history sits right below it. Three blocks side by side on a wide
-           screen, stacking on narrow ones. -->
+      <!-- Controls: each block POSTs G-code to the relay. Graph sits above its controls. -->
       <section class="controls-section" hidden>
         <h3>Controls</h3>
 
@@ -152,6 +167,7 @@
             </div>
             <div class="control-row temp-row">
               <span class="control-label">Nozzle</span>
+              <!-- max is overwritten with Klipper's max_temp once known (detail.js). -->
               <input class="extruder-target-input" type="number" min="0" max="300" step="1" inputmode="numeric" autocomplete="off">
               <span class="control-unit">°C</span>
               <div class="control-buttons">
@@ -170,10 +186,7 @@
             </div>
           </div>
 
-          <!-- One row per fan Klipper actually has configured — printers
-               often have more than the single part-cooling fan, and there's
-               no fixed list of names, so this is built from whatever the
-               live status reports (see detail.js). -->
+          <!-- Rows built from whatever fans the printer reports (detail.js). -->
           <div class="control-block fan-block">
             <div class="graph-block">
               <div class="graph-legend fan-legend"></div>
@@ -194,14 +207,21 @@
               </div>
             </div>
             <div class="fan-rows"></div>
+
+            <!-- Only shown when the printer reports a light (detail.js). Lives
+                 in the fan column so the controls grid stays three across. -->
+            <div class="light-block" hidden>
+              <p class="control-block-title">Lights</p>
+              <div class="light-rows"></div>
+            </div>
           </div>
 
           <div class="control-block move-block">
             <div class="move-head">
               <span class="position-readout">
-                <span class="position-item">X <b class="pos-x">—</b></span>
-                <span class="position-item">Y <b class="pos-y">—</b></span>
-                <span class="position-item">Z <b class="pos-z">—</b></span>
+                <span class="position-item">X <b class="pos-x">-</b></span>
+                <span class="position-item">Y <b class="pos-y">-</b></span>
+                <span class="position-item">Z <b class="pos-z">-</b></span>
               </span>
               <div class="step-picker" role="radiogroup" aria-label="Move step size">
                 <button type="button" class="step-btn" data-step="0.1">0.1</button>
@@ -236,30 +256,36 @@
       </section>
     </article>
 
-    <!-- Browse (and manage) the printer's own gcode files. No print-job
-         controls here — this is just the filesystem. -->
+    <!-- Files. Browsing is open to all; .files-manage needs manage_files (style.css). -->
     <section class="files-section" hidden>
       <div class="files-head">
         <h3>Files</h3>
         <div class="files-controls">
           <input class="files-search" type="search" placeholder="Search this folder…"
                  aria-label="Search files" autocomplete="off">
-          <button class="files-new-folder" type="button">New folder</button>
-          <button class="files-upload" type="button">Upload</button>
+          <select class="page-size files-page-size" aria-label="Rows to show">
+            <option value="10">Show 10</option>
+            <option value="25">Show 25</option>
+            <option value="50">Show 50</option>
+            <option value="100">Show 100</option>
+            <option value="all">Show all</option>
+          </select>
+          <button class="files-new-folder files-manage" type="button">New folder</button>
+          <button class="files-upload files-manage" type="button">Upload</button>
           <input class="files-upload-input" type="file" hidden>
           <button class="files-refresh icon-btn" type="button" title="Refresh" aria-label="Refresh">⟳</button>
         </div>
       </div>
       <nav class="files-breadcrumb" aria-label="Folder path"></nav>
 
-      <div class="files-bulk-bar" hidden>
+      <div class="files-bulk-bar files-manage" hidden>
         <span class="files-bulk-count"></span>
         <button type="button" class="files-bulk-delete">Delete selected</button>
       </div>
 
       <div class="files-table">
         <div class="files-table-head">
-          <span class="files-col-check">
+          <span class="files-col-check files-manage">
             <input type="checkbox" class="files-select-all" aria-label="Select all">
           </span>
           <button type="button" class="files-sort-btn" data-sort="name">Name</button>
@@ -269,16 +295,77 @@
         </div>
         <ul class="files-list"></ul>
       </div>
+      <p class="files-count" hidden></p>
       <button class="files-load-more" type="button" hidden>Load more</button>
       <p class="files-status" hidden></p>
     </section>
 
+    <!-- Moonraker [history], read-only. -->
+    <section class="history-section" hidden>
+      <div class="files-head">
+        <h3>History</h3>
+        <div class="files-controls">
+          <input class="files-search history-search" type="search" placeholder="Search history…"
+                 aria-label="Search history" autocomplete="off">
+<select class="page-size history-page-size" aria-label="Rows to show">
+            <option value="10">Show 10</option>
+            <option value="25">Show 25</option>
+            <option value="50">Show 50</option>
+            <option value="100">Show 100</option>
+            <option value="all">Show all</option>
+          </select>
+          <select class="history-filter" aria-label="Filter by result">
+            <option value="all">All results</option>
+            <option value="completed">Completed</option>
+            <option value="not_completed">Not completed</option>
+            <option value="in_progress">In progress</option>
+          </select>
+          <button class="history-clear files-manage" type="button">Clear history</button>
+          <button class="history-refresh icon-btn" type="button" title="Refresh" aria-label="Refresh">⟳</button>
+        </div>
+      </div>
+      <div class="files-bulk-bar history-bulk-bar files-manage" hidden>
+        <span class="files-bulk-count history-bulk-count"></span>
+        <button type="button" class="files-bulk-delete history-bulk-delete">Delete selected</button>
+      </div>
+
+      <div class="files-table history-table">
+        <div class="files-table-head history-table-head">
+          <span class="files-col-check files-manage">
+            <input type="checkbox" class="history-select-all" aria-label="Select all">
+          </span>
+          <span>File</span>
+          <span>Result</span>
+          <span>Started</span>
+          <span>Finished</span>
+          <span>Duration</span>
+          <span>Filament</span>
+          <span class="files-manage"></span>
+        </div>
+        <ul class="files-list history-list"></ul>
+      </div>
+      <p class="files-count history-count" hidden></p>
+      <button class="files-load-more history-load-more" type="button" hidden>Load more</button>
+      <p class="files-status history-status" hidden></p>
+    </section>
+
     <p id="not-found" class="not-found" hidden>
-      Can't find that printer — it may have been removed. <a href="/">Back to the dashboard</a>.
+      Can't find that printer. It may have been removed. <a href="/">Back to the dashboard</a>.
     </p>
   </main>
 
-  <!-- One of these per fan reported in the live status — see detail.js. -->
+  <template id="light-row-template">
+    <div class="control-row light-row">
+      <span class="control-label"></span>
+      <input type="range" min="0" max="100" step="1" class="light-level" aria-label="Brightness" hidden>
+      <span class="light-value"></span>
+      <div class="control-buttons">
+        <button type="button" class="light-on-btn">On</button>
+        <button type="button" class="light-off-btn">Off</button>
+      </div>
+    </div>
+  </template>
+
   <template id="fan-row-template">
     <div class="control-row fan-row">
       <span class="control-label"></span>
@@ -291,7 +378,7 @@
     </div>
   </template>
 
-  <script src="/shared.js"></script>
-  <script src="/detail.js"></script>
+  <script src="/static/shared.js"></script>
+  <script src="/static/detail.js"></script>
 </body>
 </html>

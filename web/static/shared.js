@@ -1,15 +1,134 @@
-// Code shared between the dashboard (app.js) and the printer detail page
-// (detail.js). Loaded before either, as a plain script — no build step, so
-// these are just global functions.
+// Shared by every page. Plain script, no build step, so these are globals.
 
 const STATE_COLOR = {
   idle: "var(--idle)",
   printing: "var(--printing)",
   paused: "var(--paused)",
+  complete: "var(--complete)",
   error: "var(--error)",
   offline: "var(--offline)",
   connecting: "var(--connecting)",
 };
+
+// --- API helper ----------------------------------------------------------------
+// fetch() that throws Error(detail) on a non-2xx. Returns the Response for
+// callers that need the body. `json` sets the body and content-type.
+
+async function api(url, { method = "GET", json, body, headers } = {}) {
+  const init = { method, headers: { ...(headers || {}) } };
+  if (json !== undefined) {
+    init.headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(json);
+  } else if (body !== undefined) {
+    init.body = body;
+  }
+  const res = await fetch(url, init);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `error ${res.status}`);
+  return res;
+}
+
+// --- "complete" + dismiss ----------------------------------------------------
+// Klipper reports "complete" until the next print starts, so without this a
+// card sits there for days. Dismiss is per browser (localStorage); the
+// printer is untouched. Keyed by printer+file+finish time so the next
+// print's completion isn't pre-dismissed.
+
+const DISMISS_KEY = "printdeck-dismissed";
+
+function completionKey(status) {
+  return `${status.id}|${status.filename || ""}|${status.completed_at || ""}`;
+}
+
+function readDismissed() {
+  try { return JSON.parse(localStorage.getItem(DISMISS_KEY) || "{}"); } catch { return {}; }
+}
+
+function isCompletionDismissed(status) {
+  return status.state === "complete" && Boolean(readDismissed()[completionKey(status)]);
+}
+
+function dismissCompletion(status) {
+  try {
+    const all = readDismissed();
+    for (const key of Object.keys(all)) if (key.startsWith(`${status.id}|`)) delete all[key];
+    all[completionKey(status)] = true;
+    localStorage.setItem(DISMISS_KEY, JSON.stringify(all));
+  } catch { /* no storage: dismiss won't survive a reload */ }
+}
+
+function displayState(status) {
+  return isCompletionDismissed(status) ? "idle" : status.state;
+}
+
+function finishedAgo(completedAt) {
+  if (!completedAt) return "Finished";
+  const mins = Math.max(0, Math.round((Date.now() / 1000 - completedAt) / 60));
+  if (mins < 1) return "Finished just now";
+  if (mins < 60) return `Finished ${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `Finished ${hours}h ${mins % 60}m ago`;
+  return `Finished ${Math.floor(hours / 24)}d ago`;
+}
+
+// --- job controls --------------------------------------------------------------
+// `root` has .job-pause/.job-resume/.job-cancel/.job-dismiss and .job-error.
+// Pause/resume/cancel are hidden without control_printers (style.css); the
+// API enforces it anyway. Dismiss is local, so anyone gets it.
+
+async function sendJobAction(id, action) {
+  await api(`/api/printers/${encodeURIComponent(id)}/job/${action}`, { method: "POST" });
+}
+
+function wireJobControls(root, id, { onDismiss } = {}) {
+  const errorEl = root.querySelector(".job-error");
+  const showError = (message) => { errorEl.textContent = message; errorEl.hidden = !message; };
+
+  const act = async (button, action) => {
+    showError("");
+    button.disabled = true;
+    try {
+      await sendJobAction(id, action);
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      button.disabled = false;
+    }
+  };
+
+  const pauseBtn = root.querySelector(".job-pause");
+  const resumeBtn = root.querySelector(".job-resume");
+  const cancelBtn = root.querySelector(".job-cancel");
+  pauseBtn.addEventListener("click", () => act(pauseBtn, "pause"));
+  resumeBtn.addEventListener("click", () => act(resumeBtn, "resume"));
+  cancelBtn.addEventListener("click", async () => {
+    // Don't read event.currentTarget after an await: it's null once dispatch ends.
+    const ok = await confirmDialog({
+      title: "Cancel print",
+      message: `Cancel "${root._jobStatus?.filename || "the current print"}"? The printer will stop and the print can't be resumed.`,
+      confirmLabel: "Cancel print",
+      danger: true,
+    });
+    if (ok) act(cancelBtn, "cancel");
+  });
+  root.querySelector(".job-dismiss").addEventListener("click", () => {
+    if (!root._jobStatus) return;
+    dismissCompletion(root._jobStatus);
+    if (onDismiss) onDismiss(root._jobStatus);
+  });
+}
+
+function renderJobControls(root, status) {
+  root._jobStatus = status;
+  const state = displayState(status);
+  root.querySelector(".job-pause").hidden = state !== "printing";
+  root.querySelector(".job-resume").hidden = state !== "paused";
+  root.querySelector(".job-cancel").hidden = state !== "printing" && state !== "paused";
+  const finished = root.querySelector(".job-finished");
+  finished.hidden = state !== "complete";
+  finished.textContent = state === "complete" ? finishedAgo(status.completed_at) : "";
+  root.querySelector(".job-dismiss").hidden = state !== "complete";
+  root.querySelector(".eta").hidden = state === "complete";
+}
 
 // --- small formatters --------------------------------------------------------
 
@@ -26,15 +145,19 @@ function eta(seconds) {
   return `~${h}h ${m % 60}m left`;
 }
 
-// --- editing a printer (name / host / group) ---------------------------------
-// Used both by the dashboard card's inline editor and the detail page's own
-// copy of the same form. `root` is any element containing the same class
-// names as the card template's .editor form.
+// --- printer editor ------------------------------------------------------------
+// `root` is the card or #detail-card; values come from its dataset.
+
+const API_KEY_UNCHANGED = "••••••••";  // the key is never sent to the browser
 
 function wirePrinterEditor(root, id) {
   const editor = root.querySelector(".editor");
   const nameInput = root.querySelector(".name-input");
   const hostInput = root.querySelector(".host-input");
+  const portInput = root.querySelector(".port-input");
+  const apiKeyInput = root.querySelector(".api-key-input");
+  const tlsInput = root.querySelector(".tls-input");
+  const crealityLightInput = root.querySelector(".creality-light-input");
   const cameraUrlInput = root.querySelector(".camera-url-input");
   const groupInput = root.querySelector(".group-input");
   const error = root.querySelector(".editor-error");
@@ -47,6 +170,11 @@ function wirePrinterEditor(root, id) {
       error.hidden = true;
       nameInput.value = root.querySelector(".name").textContent || "";
       hostInput.value = root.dataset.host || "";
+      portInput.value = root.dataset.port || "7125";
+      // Placeholder = leave as is; typing replaces; empty clears.
+      apiKeyInput.value = root.dataset.hasApiKey === "true" ? API_KEY_UNCHANGED : "";
+      tlsInput.checked = root.dataset.tls === "true";
+      crealityLightInput.checked = root.dataset.crealityLight === "true";
       cameraUrlInput.value = root.dataset.cameraUrl || "";
       groupInput.value = root.dataset.group || "";
     }
@@ -61,21 +189,18 @@ function wirePrinterEditor(root, id) {
     error.hidden = true;
     saveBtn.disabled = true;
     try {
-      const res = await fetch(`/api/printers/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: nameInput.value.trim(),
-          host: hostInput.value.trim(),
-          camera_url: cameraUrlInput.value.trim(),
-          group: groupInput.value.trim(),
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `error ${res.status}`);
-      }
-      editor.hidden = true;  // success — the live feed repaints the page
+      const body = {
+        name: nameInput.value.trim(),
+        host: hostInput.value.trim(),
+        moonraker_port: Number(portInput.value) || 7125,
+        tls: tlsInput.checked,
+        creality_light: crealityLightInput.checked,
+        camera_url: cameraUrlInput.value.trim(),
+        group: groupInput.value.trim(),
+      };
+      if (apiKeyInput.value !== API_KEY_UNCHANGED) body.api_key = apiKeyInput.value.trim();
+      await api(`/api/printers/${encodeURIComponent(id)}`, { method: "PATCH", json: body });
+      editor.hidden = true;  // the live feed repaints
     } catch (err) {
       error.textContent = err.message;
       error.hidden = false;
@@ -88,21 +213,15 @@ function wirePrinterEditor(root, id) {
   deleteBtn.addEventListener("click", async () => {
     const ok = await confirmDialog({
       title: "Remove printer",
-      message: `Remove "${root.querySelector(".name").textContent}" from PrintDeck? This only stops PrintDeck from managing it — the printer itself isn't affected.`,
+      message: `Remove "${root.querySelector(".name").textContent}" from PrintDeck? This only stops PrintDeck from managing it. The printer itself isn't affected.`,
       confirmLabel: "Remove",
       danger: true,
     });
     if (!ok) return;
     deleteBtn.disabled = true;
     try {
-      const res = await fetch(`/api/printers/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `error ${res.status}`);
-      }
-      // On the detail page there's nothing left to show; on the dashboard
-      // the card removes itself once the live feed's "removed" event
-      // arrives, so nothing else to do here in that case.
+      await api(`/api/printers/${encodeURIComponent(id)}`, { method: "DELETE" });
+      // Dashboard cards remove themselves on the "removed" event.
       if (root.id === "detail-card") location.href = "/";
     } catch (err) {
       error.textContent = err.message;
@@ -113,19 +232,11 @@ function wirePrinterEditor(root, id) {
 }
 
 // --- camera (WebRTC) ---------------------------------------------------------
-// The printer runs a tiny WebRTC server. We make the offer here, relay it
-// through our backend (which forwards it to the printer), and the video then
-// streams peer-to-peer straight from the printer to whichever page asked.
-// `card` is any element with the same .cam-frame/.cam-status children as the
-// card template (the dashboard card, or the detail page's camera block).
+// Offer made here, relayed via the backend, video peer-to-peer from the
+// printer. `card` has .cam-frame and .cam-status.
 
-// The connection itself is normally fast (well under a second), but a frame
-// won't actually render until the printer's encoder sends a keyframe, which
-// can lag behind — so give it a generous window before calling it failed
-// rather than leaving a black box up forever. Needs to comfortably outlast
-// the backend's own negotiation timeout (15s, see _negotiate in routes.py —
-// a ".local" hostname can need most of that just for DNS) or this fires
-// and gives up while the backend request is still genuinely in flight.
+// Must outlast the backend's 15s negotiation timeout, plus the encoder can
+// take a while to send a keyframe.
 const CAMERA_TIMEOUT_MS = 25000;
 
 function setCamStatus(card, state, text) {
@@ -145,16 +256,13 @@ async function startCamera(card, id) {
   }, CAMERA_TIMEOUT_MS);
   card._camWatchdog = watchdog;
 
-  // STUN is required even on a LAN: browsers hide a host candidate's real IP
-  // behind a random ".local" mDNS name for privacy, which the printer's tiny
-  // WebRTC server can't resolve. STUN hands back a server-reflexive
-  // candidate carrying the real, dialable LAN IP instead.
+  // STUN even on a LAN: browsers mask host candidates as .local mDNS names,
+  // which the printer's WebRTC server can't resolve.
   const pc = new RTCPeerConnection({
     iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
   });
   card._pc = pc;
-  // Mirror the printer page's own handshake (it offers sendrecv even though we
-  // only ever receive); its minimal server expects exactly this.
+  // The printer's server expects sendrecv, same as its own page sends.
   pc.addTransceiver("video", { direction: "sendrecv" });
   pc.ontrack = (event) => { video.srcObject = event.streams[0]; };
   pc.addEventListener("connectionstatechange", () => {
@@ -163,9 +271,7 @@ async function startCamera(card, id) {
       resetConnection(card);
     }
   });
-  // The status overlay sits on top of the video regardless of what's
-  // rendering underneath, so only clear it once a frame is actually visible —
-  // and cancel the watchdog, since we made it after all.
+  // Clear the overlay only once a frame actually renders.
   video.addEventListener("playing", () => {
     setCamStatus(card, "", "");
     clearTimeout(card._camWatchdog);
@@ -192,8 +298,7 @@ async function startCamera(card, id) {
   }
 }
 
-// Tears down the peer connection but leaves whatever status message is
-// showing in place — used on failure, where the message *is* the point.
+// Tear down but keep the status message (used on failure).
 function resetConnection(card) {
   const video = card.querySelector(".cam-frame");
   if (card._camWatchdog) { clearTimeout(card._camWatchdog); card._camWatchdog = null; }
@@ -201,20 +306,14 @@ function resetConnection(card) {
   video.srcObject = null;
 }
 
-// User-facing "hide camera" / printer-went-offline path: tear down and go
-// quiet, no lingering error from a previous attempt.
 function stopCamera(card) {
   resetConnection(card);
   setCamStatus(card, "", "");
 }
 
-// The printer's server expects a complete offer (no trickle ICE), so we need
-// at least one candidate the printer can actually dial before sending it.
-// Waiting for gathering to reach "complete" works but is slower than it
-// needs to be — it also waits out irrelevant candidates (IPv6, other
-// interfaces) and a quiescence timer. Resolving as soon as the first usable
-// (non-mDNS) candidate arrives is normally much quicker, since that's
-// typically the first — and only — thing STUN returns on a LAN.
+// No trickle ICE on the printer side, so the offer needs a dialable
+// candidate. Waiting for "complete" gathering is slow (IPv6, quiescence
+// timer); the first non-mDNS candidate is enough.
 function usableCandidate(pc, timeoutMs = 3000) {
   const isUsable = (candidate) => candidate && !candidate.candidate.includes(".local");
   if (pc.iceGatheringState === "complete") return Promise.resolve();
@@ -238,11 +337,8 @@ function usableCandidate(pc, timeoutMs = 3000) {
 }
 
 // --- theme --------------------------------------------------------------------
-// The actual light/dark values live in style.css; this just decides which
-// set applies. "system" means no override — let the prefers-color-scheme
-// media query decide. The very first paint is handled separately by an
-// inline snippet in each page's <head> (see index.html etc.), since loading
-// this file is too late to avoid a flash of the wrong theme.
+// "system" = no override. First paint is handled by theme-init.js; this
+// loads too late for that.
 
 const THEME_KEY = "printdeck-theme";
 
@@ -258,14 +354,12 @@ function setTheme(theme) {
   try {
     if (theme === "system") localStorage.removeItem(THEME_KEY);
     else localStorage.setItem(THEME_KEY, theme);
-  } catch { /* private browsing, storage disabled, etc. — theme just won't persist */ }
+  } catch { /* no storage: theme won't persist */ }
   if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   else delete document.documentElement.dataset.theme;
 }
 
-// --- session info (cached) --------------------------------------------------
-// Fetched once per page load, shared by mountAccountMenu/mountSettingsMenu/the
-// viewer-role CSS hook below — no reason for each to hit the endpoint itself.
+// --- session (fetched once per page) ------------------------------------------
 
 let _sessionPromise = null;
 function fetchSession() {
@@ -277,11 +371,8 @@ function fetchSession() {
   return _sessionPromise;
 }
 
-// A role missing a given permission can look at everything but can't do
-// whatever that permission covers — rather than thread a permission check
-// through app.js/detail.js for every button, tag <body> with one class per
-// permission the account actually has, once, and let style.css blanket-hide
-// controls by selector (body:not(.can-manage-printers) .edit-toggle, etc).
+// One body.can-<permission> class per permission; style.css hides controls
+// by selector instead of every page checking.
 function applyPermissionStyling() {
   fetchSession().then(({ permissions }) => {
     for (const permission of permissions || []) {
@@ -291,10 +382,7 @@ function applyPermissionStyling() {
 }
 
 // --- header dropdowns ---------------------------------------------------
-// Shared open/close/outside-click/Escape wiring for any toggle-button +
-// panel pair in the header (Settings, Account). `menu` should already be
-// inserted right after `toggle` inside its own .dropdown wrapper (see
-// style.css) so it anchors under that specific button.
+// `menu` must already sit right after `toggle` inside a .dropdown wrapper.
 
 function wireDropdown(toggle, menu) {
   function close() {
@@ -307,8 +395,6 @@ function wireDropdown(toggle, menu) {
     menu.hidden = !opening;
     toggle.setAttribute("aria-expanded", String(opening));
   });
-  // Clicking inside the menu itself shouldn't close it (it has its own
-  // inputs/buttons); clicking anywhere else on the page should.
   menu.addEventListener("click", (event) => event.stopPropagation());
   document.addEventListener("click", close);
   document.addEventListener("keydown", (event) => {
@@ -316,10 +402,36 @@ function wireDropdown(toggle, menu) {
   });
 }
 
+// --- topbar --------------------------------------------------------------
+// Pages ship an empty <header class="topbar">; data-conn adds #conn,
+// data-add-printer adds the + button. Static markup only.
+
+function mountTopbar() {
+  const bar = document.querySelector("header.topbar");
+  if (!bar || bar.children.length) return;
+  const wantsConn = bar.hasAttribute("data-conn");
+  const wantsAdd = bar.hasAttribute("data-add-printer");
+  bar.innerHTML = `
+    <h1><a href="/">PrintDeck</a></h1>
+    ${wantsConn ? '<span id="conn" class="conn" data-state="connecting">Connecting to server…</span>' : ""}
+    <div class="header-actions">
+      ${wantsAdd ? `<button id="add-printer" class="icon-btn add-printer-btn" type="button"
+              title="Add printer" aria-label="Add printer">+</button>` : ""}
+      <div class="dropdown">
+        <button id="settings-toggle" class="icon-btn" type="button"
+                aria-haspopup="true" aria-expanded="false"
+                title="Settings" aria-label="Settings">⚙</button>
+      </div>
+      <div class="dropdown">
+        <button id="account-toggle" class="icon-btn account-toggle" type="button" hidden
+                aria-haspopup="true" aria-expanded="false"
+                title="Account" aria-label="Account"></button>
+      </div>
+    </div>
+  `;
+}
+
 // --- settings menu -----------------------------------------------------------
-// A small dropdown off the ⚙ button in the header. Not enough settings yet
-// (just the theme, plus a link to the source) to earn its own page — every
-// page that has a #settings-toggle button gets this wired up automatically.
 
 const GITHUB_USER = "alexeastlake";
 const GITHUB_URL = `https://github.com/${GITHUB_USER}/printdeck`;
@@ -364,8 +476,6 @@ function mountSettingsMenu() {
 }
 
 // --- account menu ----------------------------------------------------------
-// Off the 👤 button — who's signed in, their role, and Sign out. Hidden
-// entirely when auth is off (there's no "account" to show).
 
 function mountAccountMenu() {
   const toggle = document.getElementById("account-toggle");
@@ -385,10 +495,7 @@ function mountAccountMenu() {
     if (!enabled || !user) return;
     toggle.hidden = false;
     toggle.title = `Signed in as ${user}`;
-    // An initial rather than a person icon — renders with the same plain,
-    // monochrome text styling as the ⚙/+ buttons next to it (an emoji
-    // glyph doesn't take the button's color and looks out of place), and
-    // it's a bit more useful: which account, not just "some account".
+    // An initial, not an emoji, because emoji ignore the button's color.
     toggle.textContent = user[0].toUpperCase();
     menu.querySelector(".account-user").textContent = user;
     menu.querySelector(".account-role").textContent = role_name || "";
@@ -402,13 +509,10 @@ function mountAccountMenu() {
   wireDropdown(toggle, menu);
 }
 
-// --- modal dialogs -------------------------------------------------------
-// Stand-ins for confirm()/prompt() — those are native browser dialogs, and
-// closing one hands focus back to whatever triggered it in a way that can
-// yank the page's scroll position around when the DOM under that element
-// changes right after (exactly what a delete-then-refresh does). A dialog
-// we build ourselves doesn't have that problem, and looks like the rest of
-// the site instead of an OS alert box.
+// --- modals -----------------------------------------------------------------
+// Not confirm()/prompt(): native dialogs restore focus in a way that jumps
+// the scroll position when the DOM under the trigger changes right after
+// (delete-then-refresh).
 
 function openModal(title) {
   const overlay = document.createElement("div");
@@ -443,9 +547,11 @@ function confirmDialog({ title = "Are you sure?", message = "", confirmLabel = "
       document.removeEventListener("keydown", onKey);
       resolve(result);
     };
+    // No Enter handler on purpose: confirm is focused so Enter already
+    // clicks it, and a document-level one fires before a focused Cancel's
+    // click, so Tab-to-Cancel-Enter would confirm.
     const onKey = (event) => {
       if (event.key === "Escape") finish(false);
-      if (event.key === "Enter") finish(true);
     };
 
     overlay.addEventListener("click", (event) => { if (event.target === overlay) finish(false); });
@@ -483,7 +589,8 @@ function promptDialog({ title = "Enter a value", label = "", value = "", confirm
     const submit = () => finish(input.value.trim() || null);
     const onKey = (event) => {
       if (event.key === "Escape") finish(null);
-      if (event.key === "Enter") submit();
+      // Text field only; Enter on Cancel must cancel (see confirmDialog).
+      if (event.key === "Enter" && event.target === input) submit();
     };
 
     overlay.addEventListener("click", (event) => { if (event.target === overlay) finish(null); });
@@ -496,9 +603,6 @@ function promptDialog({ title = "Enter a value", label = "", value = "", confirm
 }
 
 // --- image lightbox -----------------------------------------------------------
-// Click-to-enlarge for a small image (the print thumbnail) — same
-// backdrop/Escape-to-close pattern as the other modals, just no title or
-// buttons: the image itself, as big as it'll fit.
 
 function openImageLightbox(src, alt = "") {
   const overlay = document.createElement("div");
@@ -519,6 +623,7 @@ function openImageLightbox(src, alt = "") {
   document.addEventListener("keydown", onKey);
 }
 
+mountTopbar();
 mountSettingsMenu();
 mountAccountMenu();
 applyPermissionStyling();

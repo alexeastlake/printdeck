@@ -1,10 +1,7 @@
-/* PrintDeck — restrained, hand-tuned. Light by default, gentle dark mode.
-   No framework; just a small set of variables and a handful of components. */
+/* No framework; a few variables and components. Light default, dark via media query or data-theme. */
 
-/* Theme: light values live on bare :root. Dark values are defined twice —
-   once for "system preference says dark" (guarded so an explicit light
-   choice can still override it) and once for an explicit dark choice via
-   the Settings page ([data-theme] wins regardless of system preference). */
+/* Dark values twice: once for system preference (overridable by an explicit
+   light choice), once for an explicit dark choice. */
 :root {
   --bg: #f6f5f2;
   --surface: #ffffff;
@@ -13,16 +10,14 @@
   --line: #e4e2dd;
   --accent: #3a6ea5;
 
-  /* status colours. idle reuses --accent on purpose — it's a genuine hue
-     (not grey), so it reads clearly apart from offline/connecting, which
-     are both "nothing active" states and deliberately closer to each
-     other (though still distinguishable — see --connecting). */
+  /* idle reuses --accent so it reads as a real hue, not another grey. */
   --idle: var(--accent);
   --printing: #2f8f6b;
   --paused: #c08a2d;
   --error: #b4564f;
   --offline: #b8b6b1;
   --connecting: #8a6fb0;
+  --complete: #2d8a9a;  /* teal, distinct from printing's green */
 
   --radius: 10px;
   --shadow: 0 1px 2px rgba(0, 0, 0, .05), 0 4px 12px rgba(0, 0, 0, .04);
@@ -54,13 +49,8 @@
 
 * { box-sizing: border-box; }
 
-/* Any element toggled with the `hidden` attribute must actually disappear.
-   The browser's own [hidden]{display:none} UA rule loses to *any* author
-   rule that sets `display` on the same element at equal specificity (author
-   styles always beat the UA stylesheet on a tie) — so a plain `.foo {
-   display: flex }` elsewhere is enough to leave a "hidden" element visible
-   but empty. This blanket rule wins every tie, permanently, instead of
-   needing a `.foo[hidden]` override hand-added for each new component. */
+/* Any author `display:` rule beats the UA [hidden] rule on a tie; this wins
+   every tie so hidden elements actually disappear. */
 [hidden] { display: none !important; }
 
 body {
@@ -121,10 +111,8 @@ body {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--paused) 22%, transparent);
 }
 
-/* Header icon buttons (Account, Add printer, Settings) — pushed flush
-   right. Each dropdown-triggering button sits in its own .dropdown wrapper
-   (position: relative) so its menu anchors under *that* button, not
-   wherever header-actions' own right edge happens to be. */
+/* Each dropdown button has its own .dropdown (position: relative) so its
+   menu anchors under that button. */
 .header-actions {
   display: flex;
   align-items: center;
@@ -172,11 +160,9 @@ main { padding: 1.5rem; }
   padding: .5rem .9rem;
 }
 .search-input:focus { outline: none; border-color: var(--accent); }
-/* Matches #settings-toggle's .icon-btn styling, just a bigger glyph so a
-   bare "+" doesn't look lost next to the gear icon. */
+/* Bigger glyph so a bare + doesn't look lost next to the gear. */
 .add-printer-btn { font-size: 1.15rem; font-weight: 600; }
-/* A plain-text initial, same treatment as .add-printer-btn's "+" — bold so
-   it doesn't read as thin/small next to the heavier ⚙ glyph. */
+/* Bold so the initial doesn't look thin next to the gear glyph. */
 .account-toggle { font-size: .85rem; font-weight: 700; }
 
 .group { max-width: 1100px; margin-bottom: 1.5rem; }
@@ -273,9 +259,7 @@ main { padding: 1.5rem; }
   gap: 1.25rem;
   max-width: 1100px;
 }
-/* Below one card's own minimum width, force a single column rather than
-   letting the grid squeeze a card (and its jog-pad-free but still fairly
-   packed contents) narrower than it was designed for. */
+/* Single column below a card's minimum width. */
 @media (max-width: 360px) {
   .fleet { grid-template-columns: 1fr; }
 }
@@ -291,8 +275,7 @@ main { padding: 1.5rem; }
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 1.1rem 1.2rem 1.2rem;
-  /* The whole card opens the printer's detail page (see app.js) — this is
-     the affordance for that; inputs/buttons override back to their own. */
+  /* Whole card is clickable (app.js); inputs/buttons override the cursor. */
   cursor: pointer;
   transition: box-shadow .15s ease;
 }
@@ -301,14 +284,12 @@ main { padding: 1.5rem; }
 }
 /* a quiet left edge that picks up the printer's state colour */
 .card { border-left: 3px solid var(--state, var(--offline)); }
-/* An error is the one state worth catching at a glance across a busy
-   fleet — give it a tinted background, not just a small badge. */
+/* Errors get a tinted background, not just a badge. */
 .card[data-state="error"] {
   background: color-mix(in srgb, var(--error) 7%, var(--surface));
   border-left-width: 4px;
 }
-/* Nothing actively happening on these — recede a touch so printing/paused/
-   error cards (the ones actually worth your attention) stand out more. */
+/* Inactive states recede so printing/paused/error stand out. */
 .card[data-state="offline"],
 .card[data-state="connecting"] {
   opacity: .78;
@@ -321,8 +302,7 @@ main { padding: 1.5rem; }
   gap: .75rem;
   margin-bottom: .9rem;
 }
-/* The name lives in an <a>; reset the wrapping heading so its default
-   font-size/margin don't add a big gap above it. */
+/* Reset the heading so its default margin doesn't gap above the name. */
 .card-head h2 {
   margin: 0;
   font-size: inherit;
@@ -340,8 +320,7 @@ a.name {
   text-decoration: none;
 }
 a.name:hover { text-decoration: underline; }
-/* A small arrow after the name — a second, quieter cue (beyond the whole
-   card being clickable) that this leads somewhere. */
+/* Arrow after the name: a second cue that the card leads somewhere. */
 a.name::after {
   content: " ›";
   opacity: .5;
@@ -406,6 +385,21 @@ a.name::after {
   outline: none;
   border-color: var(--accent);
 }
+/* Checkbox rows: label beside the box. */
+.editor-field-check,
+.modal-field-check {
+  flex-direction: row;
+  align-items: center;
+  gap: .5rem;
+  cursor: pointer;
+}
+.editor-field-check input,
+.modal-field-check input {
+  width: auto;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+}
 .editor-actions {
   display: flex;
   gap: .5rem;
@@ -457,8 +451,7 @@ a.name::after {
   border-radius: 999px;
   white-space: nowrap;
 }
-/* A static badge reading "connecting" doesn't feel like anything's
-   happening — a slow pulse makes clear it's mid-attempt, not stuck. */
+/* Pulse so "connecting" reads as in progress, not stuck. */
 .card[data-state="connecting"] .badge { animation: state-pulse 1.6s ease-in-out infinite; }
 @keyframes state-pulse {
   0%, 100% { opacity: 1; }
@@ -506,10 +499,7 @@ a.name::after {
   max-height: 90vh;
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  /* Slicer thumbnails are PNGs with a transparent background — without
-     this they just show the dim overlay through, which is low-contrast
-     against most model colors. A solid backdrop paints behind the alpha
-     channel same as it would behind any other image content. */
+  /* Thumbnails are transparent PNGs; without a backdrop the dim overlay shows through. */
   background: var(--surface);
   padding: 1rem;
 }
@@ -539,6 +529,39 @@ a.name::after {
   font-size: .8rem;
   color: var(--ink-soft);
 }
+.job-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .4rem;
+  margin-top: .5rem;
+}
+.job-actions:empty { display: none; }
+.job-actions button {
+  font: inherit;
+  font-size: .78rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .3rem .65rem;
+  cursor: pointer;
+}
+.job-actions button:hover { border-color: var(--ink-soft); }
+.job-actions button:disabled { opacity: .6; cursor: default; }
+.job-actions button.danger { color: var(--error); border-color: var(--error); }
+.job-actions button.danger:hover { color: var(--surface); background: var(--error); }
+.job-finished {
+  font-size: .8rem;
+  color: var(--complete);
+  font-weight: 600;
+}
+.job-error {
+  margin: .5rem 0 0;
+  font-size: .78rem;
+  color: var(--error);
+}
+
 .filename {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -581,8 +604,7 @@ a.name::after {
   cursor: zoom-in;
 }
 
-/* Overlay shown while the WebRTC handshake is in flight, or if it never
-   pans out — otherwise a stalled connection just looks like a black box. */
+/* Handshake/failure overlay; otherwise a stalled camera is just a black box. */
 .cam-status {
   position: absolute;
   inset: 0;
@@ -628,9 +650,7 @@ a.name::after {
 }
 
 /* --- printer detail page ---
-   Deliberately no card box here (unlike the dashboard) — this page IS the
-   content, not a tile representing it among others. Sections are separated
-   by a divider + whitespace instead of a border/shadow/background. */
+   No card box: this page is the content. Sections split by divider + whitespace. */
 .detail-main { max-width: 1200px; }
 .detail-head {
   display: flex;
@@ -652,7 +672,7 @@ a.name::after {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--state, var(--offline)) 20%, transparent);
 }
 #detail-card[data-state="connecting"] .state-dot { animation: state-pulse 1.6s ease-in-out infinite; }
-/* Bigger, widescreen frame — this page has room the dashboard card doesn't. */
+/* Widescreen frame; there's room here. */
 .detail-camera .cam-frame { aspect-ratio: 16 / 9; }
 .klipper-status {
   margin: 0 0 1.25rem;
@@ -672,8 +692,7 @@ a.name::after {
   color: var(--ink-soft);
 }
 .printer-info-item b { color: var(--ink); font-weight: 600; }
-/* Now lives under the camera instead of inside .printer-info — needs its
-   own font-size/color/spacing since it's no longer that flex row's child. */
+/* Sits under the camera, so it needs its own type/spacing. */
 .printer-info-camera-item {
   margin: .6rem 0 0;
   font-size: .82rem;
@@ -687,11 +706,8 @@ a.name::after {
 .not-found { color: var(--ink-soft); max-width: 840px; }
 
 /* --- printer controls (detail page) ---
-   Full width, own row below the camera (pairing it beside the camera read
-   as an arbitrary grouping rather than a meaningful one). Three blocks
-   side by side on a wide screen; stacks on anything narrower than a small
-   laptop, since each block (controls + a graph) needs real room to be
-   legible, not squeezed into a third of a phone screen. */
+   Three blocks side by side on wide screens; stacked below laptop width,
+   since each block (controls + graph) needs room. */
 .controls-section { margin-top: 2rem; }
 .controls-section h3 { margin: 0 0 1.1rem; font-size: 1.05rem; font-weight: 600; }
 .controls-grid {
@@ -708,9 +724,7 @@ a.name::after {
   border-top: 1px solid var(--line);
 }
 @media (min-width: 901px) {
-  /* On the 3-column layout the top border already separates each block
-     from the "Controls" heading above; a side divider reads better than
-     a top one repeated three times in a row. */
+  /* In the 3-column layout a side divider reads better than three top borders. */
   .control-block { padding-top: 0; border-top: none; }
   .fan-block, .move-block { padding-left: 2rem; border-left: 1px solid var(--line); }
 }
@@ -740,6 +754,24 @@ a.name::after {
 .temp-row input[type="number"]:focus,
 .fan-row input[type="number"]:focus { outline: none; border-color: var(--accent); }
 .control-unit { font-size: .8rem; color: var(--ink-soft); }
+.light-block {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+.control-block-title {
+  margin: 0 0 .8rem;
+  font-size: .76rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-soft);
+}
+.light-row { grid-template-columns: 5rem 1fr 2.6rem auto; }
+.light-row.light-row-switch { grid-template-columns: 5rem 1fr auto; }
+.light-row input[type="range"] { width: 100%; accent-color: var(--accent); margin: 0; }
+.light-value { font-size: .8rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; text-align: right; }
+.light-row .light-on-btn.active { color: var(--surface); background: var(--paused); border-color: var(--paused); }
 .control-buttons { display: flex; gap: .4rem; }
 .control-buttons button {
   font: inherit;
@@ -753,12 +785,9 @@ a.name::after {
 }
 .control-buttons button:hover { border-color: var(--ink-soft); }
 
-/* Each control block's graph sits at the top, controls below — puts the
-   temp and fan graphs side by side at a glance instead of buried under a
-   variable amount of control rows. Two legend rows, not one wrapping flex
-   row — color legend (what each line's color means) and style legend
-   (solid vs dashed) are different *kinds* of key, and letting them wrap
-   into each other read as broken, not just busy. */
+/* Graph on top, controls below, so the temp and fan graphs sit side by side.
+   Two legend rows (colour key, line-style key); letting them wrap into one
+   looks broken. */
 .control-block .graph-block { margin-bottom: 1rem; }
 .graph-legend { margin-bottom: .5rem; }
 .legend-row {
@@ -775,19 +804,12 @@ a.name::after {
 .swatch-bed { background: var(--accent); }
 .swatch-fan { background: var(--printing); }
 .legend-value { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
-/* A short line sample instead of a swatch, for the two line *styles*
-   (actual vs target) — those aren't a color distinction, so a color swatch
-   would be the wrong cue. */
+/* Line samples, not swatches: actual vs target is a style difference, not a colour. */
 .legend-sample { display: inline-block; width: 14px; height: 0; border-top: 2px solid var(--ink-soft); flex: none; }
 .legend-sample-dashed { border-top-style: dashed; }
 
-/* A proper axis gutter beside the chart (not text floated over the plot,
-   which could collide with a line sitting near that edge) — the Y-axis
-   labels live in their own column, sized to content, with the plot (SVG +
-   X-axis caption) taking the rest. The SVG itself only ever carries the
-   plotted lines; every label here is plain positioned text, never SVG
-   text, so nothing gets stretched by the non-uniform scaling
-   preserveAspectRatio="none" applies to the lines. */
+/* Y labels in their own column, X labels below. All labels are positioned
+   HTML, never SVG text, because preserveAspectRatio="none" would stretch them. */
 .graph-frame { display: flex; gap: .5rem; }
 .graph-y-labels {
   display: flex;
@@ -895,8 +917,7 @@ a.name::after {
 .jog-z { display: flex; flex-direction: column; gap: .35rem; }
 .jog-z .jog-btn { width: 2.7rem; height: 2.7rem; }
 
-/* Explains *why* the jog pad is greyed out — otherwise a disabled control
-   with no reason given just looks broken. */
+/* Why the jog pad is disabled. */
 .move-disabled-note {
   margin: .8rem 0 0;
   font-size: .78rem;
@@ -911,10 +932,7 @@ a.name::after {
 .controls-status.controls-error { color: var(--error); }
 
 /* --- file browser (detail page) ---
-   Flat, like the rest of this page — a divider above sets it apart from the
-   status section, not a box. Rows form a table via matching grid columns on
-   the header and each entry, which is what makes it read as a "real" file
-   manager instead of a plain list. */
+   Header and rows share grid columns so it reads as a table. */
 .files-section {
   margin-top: 2rem;
   padding-top: 1.5rem;
@@ -955,9 +973,7 @@ a.name::after {
 .files-new-folder:hover,
 .files-upload:hover { border-color: var(--ink-soft); }
 
-/* Breadcrumb segments are buttons (not links) — nothing here is real
-   navigation, and buttons sidestep any browser default-action/focus-scroll
-   quirks entirely. */
+/* Buttons, not links: no navigation, no focus-scroll quirks. */
 .files-breadcrumb {
   margin-bottom: .8rem;
   font-size: .78rem;
@@ -1002,7 +1018,7 @@ a.name::after {
 .files-table-head,
 .file-entry {
   display: grid;
-  grid-template-columns: 1.4rem 1fr 5rem 6.5rem 4rem;
+  grid-template-columns: 1.4rem 1fr 5rem 6.5rem 5.6rem;
   align-items: center;
   gap: .6rem;
 }
@@ -1044,6 +1060,14 @@ a.name::after {
 .file-entry-dir:hover { color: var(--accent); }
 .file-name-cell { display: flex; align-items: center; gap: .6rem; min-width: 0; }
 .file-icon { flex: none; font-size: .95rem; }
+.file-thumb {
+  flex: none;
+  width: 2.4rem;
+  height: 2.4rem;
+  object-fit: contain;
+  border-radius: 4px;
+  background: var(--bg);
+}
 .file-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1056,8 +1080,7 @@ a.name::after {
   color: var(--ink-soft);
   font-variant-numeric: tabular-nums;
 }
-/* Rename/delete: always visible but subtle, full opacity on hover — visible
-   without needing a hover state (useful on touch), but not shouty. */
+/* Always visible (touch), subtle until hover. */
 .file-actions { display: flex; justify-content: flex-end; gap: .25rem; }
 .file-actions button {
   display: inline-flex;
@@ -1065,8 +1088,7 @@ a.name::after {
   justify-content: center;
   width: 1.6rem;
   height: 1.6rem;
-  /* 🗑 is a colour emoji — it ignores `color` entirely, so size/opacity are
-     the only real levers for keeping it legible rather than a faint smudge. */
+  /* 🗑 is a colour emoji and ignores `color`; size/opacity are the only levers. */
   font-size: 1.05rem;
   line-height: 1;
   color: var(--ink-soft);
@@ -1083,6 +1105,64 @@ a.name::after {
   font-size: .85rem;
   color: var(--ink-soft);
 }
+.file-print { color: var(--printing) !important; opacity: 1 !important; }
+.file-print:disabled { color: var(--ink-soft) !important; opacity: .4 !important; cursor: default; }
+.file-print:disabled:hover { background: none; }
+
+/* --- job history --- */
+.history-section {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+.history-table-head,
+.history-entry {
+  grid-template-columns: 1.4rem 1fr 10rem 8.5rem 8.5rem 5rem 8rem 2rem;
+  align-items: center;
+}
+body:not(.can-manage-files) .history-table-head,
+body:not(.can-manage-files) .history-entry {
+  grid-template-columns: 1fr 10rem 8.5rem 8.5rem 5rem 8rem;
+}
+.history-entry { cursor: default; }
+.history-entry:hover { background: none; }
+.history-result { display: flex; flex-direction: column; gap: .15rem; font-size: .82rem; }
+.history-result-main { display: inline-flex; align-items: center; gap: .4rem; }
+.history-detail { font-size: .72rem; color: var(--ink-soft); line-height: 1.3; }
+.history-dot { width: .5rem; height: .5rem; border-radius: 50%; flex: none; }
+.page-size,
+.history-filter {
+  font: inherit;
+  font-size: .8rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .35rem .5rem;
+}
+.history-clear {
+  font: inherit;
+  font-size: .8rem;
+  color: var(--error);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .35rem .7rem;
+  cursor: pointer;
+}
+.history-clear:hover { border-color: var(--error); }
+.history-started, .history-finished, .history-duration, .history-filament {
+  font-size: .82rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (max-width: 700px) {
+  .history-table-head, .history-entry { grid-template-columns: 1.4rem 1fr 8rem 5rem 2rem; }
+  body:not(.can-manage-files) .history-table-head,
+  body:not(.can-manage-files) .history-entry { grid-template-columns: 1fr 8rem 5rem; }
+  .history-started, .history-finished, .history-filament { display: none; }
+}
 .files-load-more {
   display: block;
   margin: .9rem auto 0;
@@ -1096,6 +1176,14 @@ a.name::after {
   cursor: pointer;
 }
 .files-load-more:hover { border-color: var(--ink-soft); }
+.files-count {
+  margin: .7rem 0 0;
+  text-align: center;
+  font-size: .78rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.files-count + .files-load-more { margin-top: .5rem; }
 .files-status {
   margin: .6rem 0 0;
   font-size: .82rem;
@@ -1124,12 +1212,8 @@ a.name::after {
 .users-table-head,
 .user-row {
   display: grid;
-  /* Fixed widths for every column but the first, on purpose: .users-table-head
-     and .user-row are separate grid containers (one per row), so an `auto`
-     column sizes independently in each based on *that row's own content* —
-     the header's empty actions cell computes a different width than a data
-     row's "Reset password" + trash icon, which throws off where every column
-     after it starts. Fixed widths make both compute identically. */
+  /* Fixed widths: header and rows are separate grids, so an `auto` column
+   would size differently in each and misalign. */
   grid-template-columns: 1fr 8rem 11rem;
   align-items: center;
   gap: .6rem;
@@ -1160,9 +1244,7 @@ a.name::after {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: .35rem 1.7rem .35rem .6rem;
-  /* A bare native <select> looks out of place next to everything else
-     here being custom-styled flat/minimal — swap its default OS chrome
-     for a plain chevron that matches. */
+  /* Replace the native select chrome with a plain chevron. */
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%238a8f94' stroke-width='1.5' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
@@ -1189,8 +1271,7 @@ a.name::after {
   justify-content: center;
   width: 1.9rem;
   height: 1.9rem;
-  /* 🗑 is a colour emoji — it ignores `color` entirely, so size is the
-     main lever for keeping it legible rather than a faint smudge. */
+  /* 🗑 is a colour emoji and ignores `color`; size is the only lever. */
   font-size: 1.1rem;
   color: var(--ink-soft);
   background: none;
@@ -1247,9 +1328,7 @@ a.name::after {
 
 .roles-table-head,
 .role-row {
-  /* Same fixed-width reasoning as .users-table-head/.user-row above — an
-     `auto` actions column sizes independently per (separate) grid
-     container, misaligning header vs. rows once row content isn't empty. */
+  /* Same fixed-width reasoning as .users-table-head. */
   grid-template-columns: 9rem 1fr 8rem;
 }
 .role-permissions {
@@ -1270,29 +1349,30 @@ a.name::after {
 .role-edit:hover { border-color: var(--ink-soft); }
 
 /* --- missing permissions: hide controls that would just 403 --- */
-/* The server is the real gate (see app/routes.py's manage_printers_only /
-   manage_files_only / control_printers_only dependencies) — this is only
-   so an account without a permission doesn't see buttons that don't work.
-   body gets one can-<permission> class per permission the account actually
-   has (see shared.js's applyPermissionStyling) — :not() here means "until
-   we know otherwise", so these stay hidden during the brief window before
-   that class lands too, rather than flashing visible first. */
+/* The server is the real gate; this just hides buttons that would 403.
+   body gets one .can-<permission> class per permission (shared.js).
+   :not() keeps them hidden until that lands, so nothing flashes. */
 body:not(.can-manage-printers) .edit-toggle,
 body:not(.can-manage-printers) .add-printer-btn,
-body:not(.can-manage-printers) .printer-info,
+body:not(.can-manage-printers) .printer-info:not(.lifetime-stats),
 body:not(.can-manage-printers) .printer-info-camera-item,
-body:not(.can-manage-files) .files-section,
+body:not(.can-manage-files) .files-manage,
 body:not(.can-control-printers) .control-row,
 body:not(.can-control-printers) .jog-btn,
 body:not(.can-control-printers) .jog-home,
 body:not(.can-control-printers) .step-picker,
-body:not(.can-control-printers) .move-disabled-note {
+body:not(.can-control-printers) .move-disabled-note,
+body:not(.can-control-printers) .job-control {
   display: none !important;
+}
+/* File list is open to all; only checkbox/actions need manage_files. */
+body:not(.can-manage-files) .files-table-head,
+body:not(.can-manage-files) .file-entry:not(.history-entry) {
+  grid-template-columns: 1fr 5rem 6.5rem 2rem;  /* only Print is left in the actions column */
 }
 
 /* --- settings dropdown --- */
-/* Anchored to #settings-toggle (position: relative on .header-actions). Not
-   enough settings yet to warrant a whole page. */
+
 .settings-menu {
   position: absolute;
   top: calc(100% + .6rem);
@@ -1304,8 +1384,7 @@ body:not(.can-control-printers) .move-disabled-note {
   border-radius: 10px;
   box-shadow: var(--shadow);
   padding: .9rem 1rem;
-  /* Buttons upstream set cursor: pointer for the whole header-actions area;
-     this is a content panel, not a button. */
+  /* Content panel, not a button. */
   cursor: default;
 }
 .theme-picker {

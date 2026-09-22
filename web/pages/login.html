@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PrintDeck - Sign in</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/theme-init.js"></script>
+</head>
+<body class="login-body">
+  <form id="login" class="login-card" autocomplete="off">
+    <h1 class="login-title">PrintDeck</h1>
+
+    <label class="login-field">
+      <span>Username</span>
+      <input name="username" autocomplete="username" autofocus required>
+    </label>
+    <label class="login-field">
+      <span>Password</span>
+      <input name="password" type="password" autocomplete="current-password" required>
+    </label>
+
+    <button type="submit" class="login-btn">Sign in</button>
+    <p class="login-error" role="alert" hidden></p>
+  </form>
+
+  <script src="/static/login.js"></script>
+</body>
+</html>

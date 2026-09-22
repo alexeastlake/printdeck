@@ -1,7 +1,5 @@
-// PrintDeck user management (needs the manage_users permission). The page
-// itself is also server-side gated (see app/main.py's /users route), but
-// bounce accounts without it client-side too rather than showing a page
-// that'll just 403 on every call.
+// Users page. Server-gated on manage_users; also bounces client-side so a
+// stale tab doesn't just 403 on every call.
 
 const usersList = document.querySelector(".users-list");
 const userRowTemplate = document.getElementById("user-row-template");
@@ -11,7 +9,7 @@ const addError = document.querySelector(".users-add-error");
 const addBtn = document.querySelector(".users-add-btn");
 
 let currentUsername = null;
-let roles = [];  // fetched once — every role <select> on this page is built from this
+let roles = [];  // fetched once; every role <select> on this page is built from this
 
 function setStatus(text, isError = false) {
   usersStatus.textContent = text;
@@ -26,7 +24,8 @@ async function loadRoles() {
 }
 
 function populateRoleSelect(select) {
-  select.innerHTML = roles.map((r) => `<option value="${r.id}">${r.name}</option>`).join("");
+  // Role names are user input, so no innerHTML.
+  select.replaceChildren(...roles.map((r) => new Option(r.name, r.id)));
 }
 
 async function loadUsers() {
@@ -55,12 +54,7 @@ function userRow(user) {
   roleSelect.addEventListener("change", async () => {
     const previous = user.role;
     try {
-      const res = await fetch(`/api/users/${encodeURIComponent(user.username)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role: roleSelect.value }),
-      });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `error ${res.status}`);
+      await api(`/api/users/${encodeURIComponent(user.username)}`, { method: "PATCH", json: { role: roleSelect.value } });
       user.role = roleSelect.value;
       setStatus("");
     } catch (err) {
@@ -78,12 +72,7 @@ function userRow(user) {
     if (!password) return;
     if (password.length < 8) return setStatus("Password needs to be at least 8 characters.", true);
     try {
-      const res = await fetch(`/api/users/${encodeURIComponent(user.username)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
-      });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `error ${res.status}`);
+      await api(`/api/users/${encodeURIComponent(user.username)}`, { method: "PATCH", json: { password } });
       setStatus(`Password updated for ${user.username}.`);
     } catch (err) {
       setStatus(`Couldn't reset password: ${err.message}`, true);
@@ -99,8 +88,7 @@ function userRow(user) {
     });
     if (!ok) return;
     try {
-      const res = await fetch(`/api/users/${encodeURIComponent(user.username)}`, { method: "DELETE" });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `error ${res.status}`);
+      await api(`/api/users/${encodeURIComponent(user.username)}`, { method: "DELETE" });
       if (user.username === currentUsername) return void (location.href = "/login");
       loadUsers();
     } catch (err) {
@@ -119,12 +107,7 @@ addForm.addEventListener("submit", async (event) => {
     const username = addForm.querySelector(".add-username").value.trim();
     const password = addForm.querySelector(".add-password").value;
     const role = addForm.querySelector(".add-role").value;
-    const res = await fetch("/api/users", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password, role }),
-    });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `error ${res.status}`);
+    await api("/api/users", { method: "POST", json: { username, password, role } });
     addForm.reset();
     loadUsers();
   } catch (err) {

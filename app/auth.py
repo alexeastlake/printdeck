@@ -1,73 +1,65 @@
-"""Multi-user login for the dashboard, with admin-defined roles.
+"""Login, sessions, permission checks, and the users/roles API.
 
-Auth turns on as soon as there's at least one user in users.yaml (see
-app/users_store.py). With none configured, the dashboard stays open (handy
-for local dev) and we log a loud warning — same default as before.
+Auth is on iff users.yaml has at least one user. With none, everything is
+open and every request is treated as holding every permission.
 
-A role is just a name plus a set of permissions (see models.Permission) —
-nothing about "Admin" or any other role name is hardcoded past what
-users_store.load_or_bootstrap seeds the very first account with. Viewing
-printer status/camera/files/the live feed is the implicit baseline for any
-logged-in account; every *mutating* endpoint requires a specific permission
-(declared per-endpoint in routes.py) via require_permission below.
-
-Session cookies are signed with a secret that's persisted in users.yaml
-(generated once), so — unlike the old single-credential system — logins now
-survive a server restart.
+Roles are admin-defined: a name plus a subset of models.Permission. Reads
+need a login; writes need a specific permission, declared per endpoint.
 """
 
 from __future__ import annotations
 
 import logging
+import re
+import threading
 import time
+from contextlib import contextmanager
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
+from pydantic import BaseModel, Field
 
-from .models import Permission, Role, UserOut
+from .models import ALL_PERMISSIONS, PERMISSION_CATALOG, Permission, Role, UserOut
 from .security import dummy_verify
 
 log = logging.getLogger("printdeck.auth")
 
 router = APIRouter()
 
-PERMISSION_CATALOG = [
-    {"id": "manage_printers", "label": "Manage printers",
-     "description": "Add, remove, and edit printer settings (name, IP/hostname, camera URL, group)."},
-    {"id": "control_printers", "label": "Control printers",
-     "description": "Set nozzle/bed temperature, fan speed, and move/home the toolhead."},
-    {"id": "manage_files", "label": "Manage files",
-     "description": "See the Files section, and upload, rename, or delete files."},
-    {"id": "manage_users", "label": "Manage users",
-     "description": "Create, edit, and delete accounts, and assign them roles."},
-    {"id": "manage_roles", "label": "Manage roles",
-     "description": "Create, edit, and delete roles and the permissions they grant."},
-]
+# Usernames end up in URL paths; a "/" would make an account impossible to edit or delete.
+USERNAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$"
+USERNAME_HELP = (
+    "Usernames are 1-32 characters: letters, digits, dots, hyphens, underscores, "
+    "starting with a letter or digit."
+)
+PASSWORD_MIN = 8
+PASSWORD_MAX = 256
+ROLE_NAME_MAX = 64
 
 
 class Credentials(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=256)
+    password: str = Field(max_length=PASSWORD_MAX)
 
 
 class NewUser(BaseModel):
-    username: str
-    password: str
-    role: str
+    username: str = Field(max_length=256)
+    password: str = Field(max_length=PASSWORD_MAX)
+    role: str = Field(max_length=256)
 
 
 class UserUpdate(BaseModel):
-    password: str | None = None
-    role: str | None = None
+    password: str | None = Field(default=None, max_length=PASSWORD_MAX)
+    role: str | None = Field(default=None, max_length=256)
 
 
 class NewRole(BaseModel):
-    name: str
-    permissions: list[Permission] = []
+    name: str = Field(max_length=ROLE_NAME_MAX)
+    permissions: list[Permission] = Field(default_factory=list)
 
 
 class RoleUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=ROLE_NAME_MAX)
     permissions: list[Permission] | None = None
 
 
@@ -80,16 +72,54 @@ def auth_enabled(request: Request) -> bool:
 
 
 # --- brute-force backoff ----------------------------------------------------
-# In-memory per-client lockout after repeated failed logins. Resets on server
-# restart, which is fine here — the threat model is a LAN device guessing
-# passwords over many requests, not a distributed attack.
+# Keyed per IP *and* per username. Behind a reverse proxy every client shares
+# the proxy's IP, so IP alone would let one person lock everyone out and do
+# nothing against a spray from many addresses. In-memory; resets on restart.
 MAX_ATTEMPTS = 5
-BASE_LOCKOUT = 5.0  # seconds
-MAX_LOCKOUT = 300.0  # cap the exponential backoff at 5 minutes
-_failed_logins: dict[str, tuple[int, float]] = {}  # key -> (fail count, locked_until)
+BASE_LOCKOUT = 5.0
+MAX_LOCKOUT = 300.0
+FAILURE_TTL = 900.0  # forget a key this long after its last failure
+
+
+class _LoginBackoff:
+    def __init__(self) -> None:
+        self._entries: dict[str, tuple[int, float, float]] = {}  # key -> (fails, locked_until, last_seen)
+        self._lock = threading.Lock()  # login() is sync → runs on worker threads
+
+    def _evict(self, now: float) -> None:
+        stale = [k for k, (_, locked_until, last) in self._entries.items()
+                 if now > locked_until and now - last > FAILURE_TTL]
+        for k in stale:
+            del self._entries[k]
+
+    def locked_for(self, keys: list[str]) -> float:
+        now = time.monotonic()
+        with self._lock:
+            self._evict(now)
+            return max((self._entries[k][1] - now for k in keys if k in self._entries), default=0.0)
+
+    def record_failure(self, keys: list[str]) -> None:
+        now = time.monotonic()
+        with self._lock:
+            for key in keys:
+                fails, _, _ = self._entries.get(key, (0, 0.0, now))
+                fails += 1
+                lockout = 0.0
+                if fails >= MAX_ATTEMPTS:
+                    lockout = min(BASE_LOCKOUT * 2 ** (fails - MAX_ATTEMPTS), MAX_LOCKOUT)
+                self._entries[key] = (fails, now + lockout, now)
+
+    def clear(self, keys: list[str]) -> None:
+        with self._lock:
+            for key in keys:
+                self._entries.pop(key, None)
+
+
+_backoff = _LoginBackoff()
 
 
 def _client_key(request: Request) -> str:
+    # Only meaningful behind a proxy if FORWARDED_ALLOW_IPS is set (see README).
     return request.client.host if request.client else "unknown"
 
 
@@ -97,35 +127,26 @@ def _client_key(request: Request) -> str:
 def login(request: Request, creds: Credentials) -> dict:
     users = _users(request)
     if not users.list():
-        return {"ok": True, "user": None, "role": None, "permissions": []}
+        return {"ok": True, "user": None, "role": None, "permissions": list(ALL_PERMISSIONS)}
 
-    key = _client_key(request)
-    now = time.monotonic()
-    fails, locked_until = _failed_logins.get(key, (0, 0.0))
-    if now < locked_until:
+    keys = [f"ip:{_client_key(request)}", f"user:{creds.username}"]
+    remaining = _backoff.locked_for(keys)
+    if remaining > 0:
         raise HTTPException(
             status_code=429,
-            detail=f"Too many attempts. Try again in {int(locked_until - now) + 1}s.",
+            detail=f"Too many attempts. Try again in {int(remaining) + 1}s.",
         )
 
     user = users.verify(creds.username, creds.password)
     if user is None:
         if users.get(creds.username) is None:
-            dummy_verify()  # don't let response timing reveal a valid username
-        fails += 1
-        lockout = 0.0
-        if fails >= MAX_ATTEMPTS:
-            lockout = min(BASE_LOCKOUT * 2 ** (fails - MAX_ATTEMPTS), MAX_LOCKOUT)
-        _failed_logins[key] = (fails, now + lockout)
+            dummy_verify()  # keep timing the same for unknown usernames
+        _backoff.record_failure(keys)
         raise HTTPException(status_code=401, detail="Wrong username or password.")
 
-    _failed_logins.pop(key, None)
-    # Role isn't stored here — it's always re-checked against the live store
-    # (see _live_user), never trusted from the cookie, so a role
-    # change/deletion (or a permission change on the role itself) takes
-    # effect immediately rather than only once the old cookie expires.
-    # session_version is stored so a later password change invalidates this
-    # session too (see _live_user and UserStore.update).
+    _backoff.clear(keys)
+    # Role is never stored in the cookie. It's always re-read from the store (see _live_user).
+    # session_version lets a password change invalidate existing sessions.
     request.session["user"] = user.username
     request.session["session_version"] = user.session_version
     return {
@@ -143,36 +164,36 @@ def logout(request: Request) -> dict:
 
 
 def _live_user(request: Request):
-    """The session's user, re-checked against the current in-memory store —
-    not just whatever was baked into the signed cookie at login time.
-    Session cookies are stateless, so without this, deleting a user,
-    reassigning their role, or editing that role's permissions wouldn't
-    take effect until their cookie expired or they logged out — this is a
-    plain dict lookup (app.state.users is already loaded in memory), not a
-    disk read, so it costs nothing to do on every request.
-
-    Also rejects a session whose session_version doesn't match the user's
-    current one — that's what makes a password change invalidate every
-    session issued with the old password, not just future logins."""
+    """Session user re-checked against the store on every request, so a
+    deleted user / changed role / changed password takes effect immediately
+    rather than when the cookie expires. It's a dict lookup, so it's cheap."""
     username = request.session.get("user")
     if not username:
         return None
     user = _users(request).get(username)
     if user is None or user.session_version != request.session.get("session_version"):
-        request.session.clear()  # gone, or logged in under a since-changed password
+        request.session.clear()
         return None
     return user
 
 
 @router.get("/api/session")
 def session_info(request: Request) -> dict:
-    """Public: lets the frontend show account info (and drive which
-    controls are visible) without needing its own login check."""
+    """Public. The UI hides/shows controls from `permissions`, so with auth
+    off this must report everything, because that's what the API allows."""
     users = _users(request)
+    if not auth_enabled(request):
+        return {
+            "enabled": False,
+            "user": None,
+            "role": None,
+            "role_name": None,
+            "permissions": list(ALL_PERMISSIONS),
+        }
     user = _live_user(request)
     role = users.get_role(user.role) if user else None
     return {
-        "enabled": auth_enabled(request),
+        "enabled": True,
         "user": user.username if user else None,
         "role": user.role if user else None,
         "role_name": role.name if role else None,
@@ -181,10 +202,7 @@ def session_info(request: Request) -> dict:
 
 
 def current_permissions(request: Request) -> list[str] | None:
-    """The logged-in session's live permissions, or None if not logged in
-    (or the session's since been invalidated). Safe to call outside the
-    require_user/require_permission dependency flow — main.py's page
-    routing uses this to decide redirects."""
+    """None if not logged in. Used by main.py's page redirects."""
     user = _live_user(request)
     if user is None:
         return None
@@ -192,7 +210,6 @@ def current_permissions(request: Request) -> list[str] | None:
 
 
 def require_user(request: Request) -> str:
-    """FastAPI dependency: 401 unless logged in (or auth is disabled)."""
     if not auth_enabled(request):
         return "anonymous"
     user = _live_user(request)
@@ -202,9 +219,6 @@ def require_user(request: Request) -> str:
 
 
 def require_permission(permission: str):
-    """FastAPI dependency factory: 401 unless logged in, 403 unless the
-    live user's role grants `permission` (right now — not whatever it was
-    when they logged in)."""
     def check(request: Request) -> str:
         if not auth_enabled(request):
             return "anonymous"
@@ -217,114 +231,141 @@ def require_permission(permission: str):
     return check
 
 
+def _same_origin(websocket: WebSocket) -> bool:
+    # SameSite=Lax already keeps the cookie off cross-site handshakes; this is
+    # belt and braces. No Origin header = non-browser client, let it through.
+    origin = websocket.headers.get("origin")
+    if not origin:
+        return True
+    host = websocket.headers.get("host", "")
+    return urlsplit(origin).netloc.lower() == host.lower()
+
+
 def ws_authorized(websocket: WebSocket) -> bool:
+    if not _same_origin(websocket):
+        return False
     users = websocket.app.state.users
     if not users.list():
         return True
     username = websocket.session.get("user")
-    return bool(username and users.get(username))
+    user = users.get(username) if username else None
+    return user is not None and user.session_version == websocket.session.get("session_version")
 
 
-# --- roles: read is open to any logged-in account, writes need manage_roles -
+# --- users + roles API ------------------------------------------------------
+# This router is mounted public, so each endpoint declares its own gate.
 
-@router.get("/api/permissions")
-def list_permissions(request: Request) -> list[dict]:
-    require_user(request)
+logged_in = [Depends(require_user)]
+manage_roles = [Depends(require_permission("manage_roles"))]
+manage_users = [Depends(require_permission("manage_users"))]
+
+
+@contextmanager
+def _store_errors(entity: str):
+    """Translate UserStore exceptions for an endpoint about `entity`
+    ("user" or "role"): a missing record is 404, except a bad role reference
+    on a user endpoint, which is the caller's input → 400. Rule violations → 409."""
+    try:
+        yield
+    except KeyError as exc:
+        missing = exc.args[0] if exc.args else entity
+        if missing == "role" and entity == "user":
+            raise HTTPException(status_code=400, detail="No such role.")
+        raise HTTPException(status_code=404, detail=f"No such {missing}.")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+def _validate_username(username: str) -> str:
+    username = username.strip()
+    if not re.match(USERNAME_PATTERN, username):
+        raise HTTPException(status_code=400, detail=USERNAME_HELP)
+    return username
+
+
+def _validate_password(password: str) -> None:
+    if len(password) < PASSWORD_MIN:
+        raise HTTPException(status_code=400, detail=f"Password needs to be at least {PASSWORD_MIN} characters.")
+
+
+def _validate_role_name(name: str) -> str:
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name can't be empty.")
+    return name
+
+
+def _user_out(user) -> UserOut:
+    return UserOut(username=user.username, role=user.role)
+
+
+@router.get("/api/permissions", dependencies=logged_in)
+def list_permissions() -> list[dict]:
     return PERMISSION_CATALOG
 
 
-@router.get("/api/roles")
+@router.get("/api/roles", dependencies=logged_in)
 def list_roles(request: Request) -> list[Role]:
-    require_user(request)
     return _users(request).list_roles()
 
 
-@router.post("/api/roles")
+@router.post("/api/roles", dependencies=manage_roles)
 def create_role(request: Request, body: NewRole) -> Role:
-    require_permission("manage_roles")(request)
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Name can't be empty.")
-    return _users(request).create_role(name, body.permissions)
+    name = _validate_role_name(body.name)
+    with _store_errors("role"):
+        return _users(request).create_role(name, body.permissions)
 
 
-@router.patch("/api/roles/{role_id}")
+@router.patch("/api/roles/{role_id}", dependencies=manage_roles)
 def update_role(request: Request, role_id: str, body: RoleUpdate) -> Role:
-    require_permission("manage_roles")(request)
-    if body.name is not None and not body.name.strip():
-        raise HTTPException(status_code=400, detail="Name can't be empty.")
-    try:
+    if body.name is not None:
+        _validate_role_name(body.name)
+    # Otherwise a manage_roles-only account just grants itself everything.
+    me = _live_user(request)
+    if body.permissions is not None and me is not None and me.role == role_id:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "You can't change the permissions of your own role. "
+                "Sign in as an account with a different role to edit this one."
+            ),
+        )
+    with _store_errors("role"):
         return _users(request).update_role(role_id, name=body.name, permissions=body.permissions)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="No such role.")
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
 
 
-@router.delete("/api/roles/{role_id}")
+@router.delete("/api/roles/{role_id}", dependencies=manage_roles)
 def delete_role(request: Request, role_id: str) -> dict:
-    require_permission("manage_roles")(request)
-    try:
+    with _store_errors("role"):
         _users(request).delete_role(role_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="No such role.")
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
     return {"ok": True}
 
 
-# --- user management (needs manage_users) -----------------------------------
-# auth.router is mounted *publicly* in main.py (unlike routes.api_router),
-# so every endpoint below declares its own permission dependency explicitly.
-
-@router.get("/api/users")
+@router.get("/api/users", dependencies=manage_users)
 def list_users(request: Request) -> list[UserOut]:
-    require_permission("manage_users")(request)
-    return [UserOut(username=u.username, role=u.role) for u in _users(request).list()]
+    return [_user_out(u) for u in _users(request).list()]
 
 
-@router.post("/api/users")
+@router.post("/api/users", dependencies=manage_users)
 def create_user(request: Request, body: NewUser) -> UserOut:
-    require_permission("manage_users")(request)
-    username = body.username.strip()
-    if not username:
-        raise HTTPException(status_code=400, detail="Username can't be empty.")
-    if len(body.password) < 8:
-        raise HTTPException(status_code=400, detail="Password needs to be at least 8 characters.")
-    try:
-        user = _users(request).create(username, body.password, body.role)
-    except KeyError:
-        raise HTTPException(status_code=400, detail="No such role.")
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    return UserOut(username=user.username, role=user.role)
+    username = _validate_username(body.username)
+    _validate_password(body.password)
+    with _store_errors("user"):
+        return _user_out(_users(request).create(username, body.password, body.role))
 
 
-@router.patch("/api/users/{username}")
+@router.patch("/api/users/{username}", dependencies=manage_users)
 def update_user(request: Request, username: str, body: UserUpdate) -> UserOut:
-    require_permission("manage_users")(request)
-    if body.password is not None and len(body.password) < 8:
-        raise HTTPException(status_code=400, detail="Password needs to be at least 8 characters.")
-    try:
-        user = _users(request).update(username, password=body.password, role=body.role)
-    except KeyError as exc:
-        if exc.args[0] == "role":
-            raise HTTPException(status_code=400, detail="No such role.")
-        raise HTTPException(status_code=404, detail="No such user.")
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    return UserOut(username=user.username, role=user.role)
+    if body.password is not None:
+        _validate_password(body.password)
+    with _store_errors("user"):
+        return _user_out(_users(request).update(username, password=body.password, role=body.role))
 
 
-@router.delete("/api/users/{username}")
+@router.delete("/api/users/{username}", dependencies=manage_users)
 def delete_user(request: Request, username: str) -> dict:
-    require_permission("manage_users")(request)
-    try:
+    with _store_errors("user"):
         _users(request).delete(username)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="No such user.")
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
     if request.session.get("user") == username:
-        request.session.clear()  # they just deleted their own account
+        request.session.clear()
     return {"ok": True}

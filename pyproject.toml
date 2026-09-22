@@ -1,12 +1,15 @@
 [project]
 name = "printdeck"
 version = "0.1.0"
-description = "A small local dashboard for Moonraker 3D printers (starting with a Creality K1C 2025)."
+description = "A small self-hosted dashboard for Moonraker/Klipper 3D printers."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
-    "websockets>=12",
+    "websockets>=14",     # >=14 for the asyncio client's additional_headers= (Moonraker API key)
     "pydantic>=2.7",
     "pyyaml>=6.0",
     "itsdangerous>=2.0",  # signed session cookies (Starlette SessionMiddleware)
@@ -14,10 +17,41 @@ dependencies = [
     "python-multipart>=0.0.9",  # lets FastAPI parse the file-upload form
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.5",
+]
+
+[project.urls]
+Source = "https://github.com/alexeastlake/printdeck"
+
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-# web/ is static assets, not a Python package — point setuptools at the backend.
+# web/ is static assets, not a Python package, so point setuptools at the backend.
 packages = ["app"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+# B008: FastAPI's File(...)/Form(...) defaults are the documented idiom.
+# B904: re-raising as HTTPException inside except is how every handler here
+#       translates store/proxy errors; chaining adds nothing to the response.
+ignore = ["B008", "B904"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test assertions read better on one line than wrapped.
+"tests/*" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # Starlette's TestClient warns that it wants httpx2; the tests work fine on httpx 0.28.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:starlette.exceptions.StarletteDeprecationWarning",
+]
