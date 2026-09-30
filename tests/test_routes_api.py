@@ -298,3 +298,47 @@ def test_delete_file_reports_a_real_message_when_everything_fails(open_client, f
     fake_moonraker.on("/server/files/gcodes/stuck.gcode", httpx.Response(400, json={"error": {"message": "Invalid file path"}}))
     r = open_client.delete("/api/printers/k1c/files?path=stuck.gcode")
     assert r.status_code == 502 and r.json()["detail"] == "the printer didn't confirm the delete within 15s"
+
+
+# --- scan ------------------------------------------------------------------
+
+def test_scan_range_validation(open_client):
+    bad = [
+        {"start": "nope", "end": "192.168.1.5"},
+        {"start": "192.168.1.1", "end": "::1"},
+        {"start": "192.168.0.0", "end": "192.168.1.255"},  # 512 addresses
+        {"start": "8.8.8.1", "end": "8.8.8.5"},  # not private
+    ]
+    for body in bad:
+        assert open_client.post("/api/printers/k1c/scan", json=body).status_code == 400, body
+    assert open_client.post("/api/printers/ghost/scan", json={"start": "192.168.1.1", "end": "192.168.1.2"}).status_code == 404
+
+
+def test_scan_finds_moonraker_hosts(open_client, fake_moonraker):
+    open_client.patch("/api/printers/k1c", json={"api_key": "secret", "moonraker_port": 7130})
+
+    def server_info(request):
+        if request.url.host == "192.168.1.103":
+            raise httpx.ConnectError("refused")
+        if request.url.host == "192.168.1.104":
+            return httpx.Response(200, text="<html>some router</html>")
+        return ok({"klippy_state": "ready"})
+
+    def printer_info(request):
+        if request.url.host == "192.168.1.102":
+            return httpx.Response(503, json={"error": {"message": "Klippy Disconnected"}})
+        return ok({"hostname": f"k1c-{request.url.host.rsplit('.', 1)[1]}"})
+
+    fake_moonraker.on("/server/info", server_info)
+    fake_moonraker.on("/printer/info", printer_info)
+    # Reversed range is fine.
+    r = open_client.post("/api/printers/k1c/scan", json={"start": "192.168.1.104", "end": "192.168.1.101"})
+    assert r.status_code == 200
+    assert r.json() == [
+        {"host": "192.168.1.101", "hostname": "k1c-101"},
+        {"host": "192.168.1.102", "hostname": None},  # Moonraker up, Klippy down
+    ]
+    probe = fake_moonraker.requests[0]
+    assert probe.url.port == 7130 and probe.headers["X-Api-Key"] == "secret"
+    # Scanning doesn't touch the config.
+    assert open_client.get("/api/printers/k1c/status").json()["host"] == "192.168.1.50"

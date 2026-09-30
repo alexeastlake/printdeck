@@ -138,6 +138,7 @@ def test_viewer_can_read_but_not_write(viewer_client):
         ("post", "/api/printers", {"name": "x", "host": "1.1.1.1"}),
         ("patch", "/api/printers/k1c", {"name": "x"}),
         ("delete", "/api/printers/k1c", None),
+        ("post", "/api/printers/k1c/scan", {"start": "192.168.1.1", "end": "192.168.1.2"}),
         ("post", "/api/printers/k1c/gcode", {"script": "G28"}),
         ("post", "/api/printers/k1c/job/pause", None),
         ("post", "/api/printers/k1c/creality/light", {"on": True}),

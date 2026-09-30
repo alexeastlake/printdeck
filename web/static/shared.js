@@ -184,6 +184,22 @@ function wirePrinterEditor(root, id) {
     editor.hidden = true;
   });
 
+  // Fills the form only; nothing changes until Save.
+  root.querySelector(".btn-scan").addEventListener("click", async () => {
+    const oldHost = hostInput.value.trim();
+    const host = await scanDialog(id, oldHost);
+    if (!host || host === oldHost) return;
+    hostInput.value = host;
+    // Save sends the camera URL explicitly, so the server won't move it for us.
+    try {
+      const camera = new URL(cameraUrlInput.value.trim());
+      if (camera.hostname === oldHost) {
+        camera.hostname = host;
+        cameraUrlInput.value = camera.href;
+      }
+    } catch { /* empty or not a URL: leave it */ }
+  });
+
   editor.addEventListener("submit", async (event) => {
     event.preventDefault();
     error.hidden = true;
@@ -228,6 +244,102 @@ function wirePrinterEditor(root, id) {
       error.hidden = false;
       deleteBtn.disabled = false;
     }
+  });
+}
+
+// --- scan for a moved printer ---------------------------------------------------
+// For printers that get a new DHCP address every boot. The server probes the
+// range for Moonraker; resolves with the picked IP, or null.
+
+const SCAN_SPREAD = 15;  // default range: this many either side of the last IP
+
+function defaultScanRange(host) {
+  const match = /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d{1,3})$/.exec(host || "");
+  if (!match) return ["", ""];
+  const last = Number(match[2]);
+  return [`${match[1]}.${Math.max(1, last - SCAN_SPREAD)}`, `${match[1]}.${Math.min(254, last + SCAN_SPREAD)}`];
+}
+
+function scanDialog(id, currentHost) {
+  return new Promise((resolve) => {
+    const { overlay, body } = openModal("Scan for printer");
+    body.innerHTML = `
+      <p class="modal-message">Looks for Moonraker on each IP in the range, using this printer's port and API key.</p>
+      <div class="scan-range">
+        <label class="modal-field">
+          <span>From</span>
+          <input type="text" class="modal-input scan-start" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="192.168.1.100">
+        </label>
+        <label class="modal-field">
+          <span>To</span>
+          <input type="text" class="modal-input scan-end" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="192.168.1.130">
+        </label>
+      </div>
+      <p class="modal-message scan-status" hidden></p>
+      <ul class="scan-results" hidden></ul>
+      <div class="modal-actions">
+        <button type="button" class="modal-cancel">Cancel</button>
+        <button type="button" class="modal-confirm">Scan</button>
+      </div>
+    `;
+    const startInput = body.querySelector(".scan-start");
+    const endInput = body.querySelector(".scan-end");
+    const statusEl = body.querySelector(".scan-status");
+    const resultsEl = body.querySelector(".scan-results");
+    const scanBtn = body.querySelector(".modal-confirm");
+    [startInput.value, endInput.value] = defaultScanRange(currentHost);
+
+    const finish = (result) => {
+      overlay.remove();
+      document.removeEventListener("keydown", onKey);
+      resolve(result);
+    };
+
+    const scan = async () => {
+      if (scanBtn.disabled) return;  // Enter while a scan is running
+      scanBtn.disabled = true;
+      resultsEl.hidden = true;
+      resultsEl.replaceChildren();
+      statusEl.textContent = "Scanning…";
+      statusEl.hidden = false;
+      try {
+        const res = await api(`/api/printers/${encodeURIComponent(id)}/scan`, {
+          method: "POST",
+          json: { start: startInput.value.trim(), end: endInput.value.trim() },
+        });
+        const found = await res.json();
+        statusEl.textContent = found.length
+          ? "Pick one, then Save the printer settings."
+          : "No Moonraker found in that range. Is the printer on?";
+        for (const { host, hostname } of found) {
+          const item = document.createElement("li");
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "scan-result";
+          btn.textContent = [host, hostname, host === currentHost ? "(current)" : ""].filter(Boolean).join(" · ");
+          btn.addEventListener("click", () => finish(host));
+          item.append(btn);
+          resultsEl.append(item);
+        }
+        resultsEl.hidden = !found.length;
+      } catch (err) {
+        statusEl.textContent = err.message;
+      } finally {
+        scanBtn.disabled = false;
+      }
+    };
+
+    const onKey = (event) => {
+      if (event.key === "Escape") finish(null);
+      // Text fields only; Enter on Cancel must cancel (see confirmDialog).
+      if (event.key === "Enter" && (event.target === startInput || event.target === endInput)) scan();
+    };
+
+    overlay.addEventListener("click", (event) => { if (event.target === overlay) finish(null); });
+    body.querySelector(".modal-cancel").addEventListener("click", () => finish(null));
+    scanBtn.addEventListener("click", scan);
+    document.addEventListener("keydown", onKey);
+    startInput.focus();
   });
 }
 

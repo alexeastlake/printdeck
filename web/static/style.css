@@ -385,6 +385,20 @@ a.name::after {
   outline: none;
   border-color: var(--accent);
 }
+.host-row { display: flex; gap: .4rem; }
+.host-row input { flex: 1; min-width: 0; }
+.btn-scan {
+  font: inherit;
+  font-size: .8rem;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .35rem .7rem;
+  cursor: pointer;
+}
 /* Checkbox rows: label beside the box. */
 .editor-field-check,
 .modal-field-check {
@@ -1535,3 +1549,32 @@ body:not(.can-manage-files) .file-entry:not(.history-entry) {
 .modal-cancel { color: var(--ink); background: var(--surface); }
 .modal-confirm { color: var(--surface); background: var(--accent); border-color: var(--accent); }
 .modal-confirm.danger { background: var(--error); border-color: var(--error); }
+.modal-confirm:disabled { opacity: .6; cursor: default; }
+
+/* Scan for printer */
+.scan-range { display: flex; gap: .5rem; }
+.scan-range .modal-field { flex: 1; min-width: 0; }
+.scan-results {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.scan-result {
+  width: 100%;
+  font: inherit;
+  font-size: .85rem;
+  text-align: left;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .45rem .6rem;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.scan-result:hover, .scan-result:focus-visible { border-color: var(--accent); outline: none; }
