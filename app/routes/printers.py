@@ -125,6 +125,36 @@ def validate_scan_range(start: str, end: str) -> list[str]:
     return [str(a) for a in addresses]
 
 
+# Field -> cleaner, shared by create and update. Each returns the stored
+# value or raises a 400 with a message the UI shows as-is.
+_CLEANERS = {
+    "name": validate_name,
+    "host": validate_host,
+    "moonraker_port": validate_port,
+    "api_key": validate_api_key,
+    "camera_url": validate_camera_url,
+    "group": str.strip,
+}
+
+
+def clean_fields(fields: dict) -> dict:
+    return {key: _CLEANERS[key](value) if key in _CLEANERS else value for key, value in fields.items()}
+
+
+def camera_url_for_new_host(camera_url: str, old_host: str, new_host: str) -> str:
+    """The camera URL moved to new_host, if its hostname is exactly old_host.
+    Compares the parsed hostname: a substring match would turn a camera on
+    10.0.0.12 into <new>2 when the printer moves off 10.0.0.1."""
+    parts = urlsplit(camera_url)
+    if not parts.hostname or parts.hostname.lower() != old_host.lower():
+        return camera_url
+    host = f"[{new_host}]" if ":" in new_host else new_host
+    netloc = host if parts.port is None else f"{host}:{parts.port}"
+    if "@" in parts.netloc:
+        netloc = f"{parts.netloc.rsplit('@', 1)[0]}@{netloc}"
+    return parts._replace(netloc=netloc).geturl()
+
+
 def unique_id(manager, name: str) -> str:
     """Slug of the name, suffixed if taken. Nobody wants to invent an id."""
     base_id = slugify(name)
@@ -146,18 +176,8 @@ def list_printers(request: Request) -> list[PrinterStatus]:
 @router.post("/printers", dependencies=manage_printers_only)
 async def create_printer(request: Request, body: NewPrinter) -> PrinterStatus:
     manager = request.app.state.manager
-    name = validate_name(body.name)
-    config = PrinterConfig(
-        id=unique_id(manager, name),
-        name=name,
-        host=validate_host(body.host),
-        moonraker_port=validate_port(body.moonraker_port),
-        api_key=validate_api_key(body.api_key),
-        tls=body.tls,
-        camera_url=validate_camera_url(body.camera_url),
-        group=body.group.strip(),
-        creality_light=body.creality_light,
-    )
+    fields = clean_fields(body.model_dump())
+    config = PrinterConfig(id=unique_id(manager, fields["name"]), **fields)
     return await manager.add_printer(config)
 
 
@@ -185,32 +205,11 @@ async def update_printer(request: Request, printer_id: str, update: PrinterUpdat
     if old is None:
         raise HTTPException(status_code=404, detail="unknown printer")
 
-    fields: dict = {}
-    if update.name is not None:
-        fields["name"] = validate_name(update.name)
-
-    camera_url = old.camera_url
-    if update.host is not None:
-        host = validate_host(update.host)
-        fields["host"] = host
-        # Camera is usually on the same host, so follow it unless set explicitly.
-        if update.camera_url is None and camera_url and old.host and old.host in camera_url:
-            camera_url = camera_url.replace(old.host, host)
-    if update.camera_url is not None:
-        camera_url = validate_camera_url(update.camera_url)
-    fields["camera_url"] = camera_url
-
-    if update.moonraker_port is not None:
-        fields["moonraker_port"] = validate_port(update.moonraker_port)
-    if update.api_key is not None:
-        fields["api_key"] = validate_api_key(update.api_key)
-    if update.tls is not None:
-        fields["tls"] = update.tls
-    if update.group is not None:
-        fields["group"] = update.group.strip()
-    if update.creality_light is not None:
-        fields["creality_light"] = update.creality_light
-
+    # None = leave as is ("" clears api_key/camera_url, via their cleaners).
+    fields = clean_fields(update.model_dump(exclude_none=True))
+    # Camera is usually on the same host, so follow it unless set explicitly.
+    if "host" in fields and "camera_url" not in fields and old.camera_url:
+        fields["camera_url"] = camera_url_for_new_host(old.camera_url, old.host, fields["host"])
     return await manager.update_printer(printer_id, **fields)
 
 

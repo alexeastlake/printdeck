@@ -3,20 +3,18 @@ root); a missing file falls back to the bundled example."""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import yaml
 
 from .models import PrinterConfig
-from .utils import atomic_write_text
+from .utils import ROOT, atomic_write_text, data_file
 
-ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE_FILE = ROOT / "printers.example.yaml"
 
 
 def default_printers_file() -> Path:
-    return Path(os.environ.get("PRINTDECK_PRINTERS") or ROOT / "printers.yaml")
+    return data_file("PRINTDECK_PRINTERS", "printers.yaml")
 
 
 def load_printers(path: Path) -> list[PrinterConfig]:

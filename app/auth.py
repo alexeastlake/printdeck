@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket
 from pydantic import BaseModel, Field
+from starlette.requests import HTTPConnection
 
 from .models import ALL_PERMISSIONS, PERMISSION_CATALOG, Permission, Role, UserOut
 from .security import dummy_verify
@@ -63,12 +64,14 @@ class RoleUpdate(BaseModel):
     permissions: list[Permission] | None = None
 
 
-def _users(request: Request):
-    return request.app.state.users
+# HTTPConnection: works for a Request and a WebSocket alike.
+
+def _users(conn: HTTPConnection):
+    return conn.app.state.users
 
 
-def auth_enabled(request: Request) -> bool:
-    return bool(_users(request).list())
+def auth_enabled(conn: HTTPConnection) -> bool:
+    return _users(conn).has_users()
 
 
 # --- brute-force backoff ----------------------------------------------------
@@ -126,7 +129,7 @@ def _client_key(request: Request) -> str:
 @router.post("/auth/login")
 def login(request: Request, creds: Credentials) -> dict:
     users = _users(request)
-    if not users.list():
+    if not users.has_users():
         return {"ok": True, "user": None, "role": None, "permissions": list(ALL_PERMISSIONS)}
 
     keys = [f"ip:{_client_key(request)}", f"user:{creds.username}"]
@@ -163,16 +166,16 @@ def logout(request: Request) -> dict:
     return {"ok": True}
 
 
-def _live_user(request: Request):
+def _live_user(conn: HTTPConnection):
     """Session user re-checked against the store on every request, so a
     deleted user / changed role / changed password takes effect immediately
     rather than when the cookie expires. It's a dict lookup, so it's cheap."""
-    username = request.session.get("user")
+    username = conn.session.get("user")
     if not username:
         return None
-    user = _users(request).get(username)
-    if user is None or user.session_version != request.session.get("session_version"):
-        request.session.clear()
+    user = _users(conn).get(username)
+    if user is None or user.session_version != conn.session.get("session_version"):
+        conn.session.clear()
         return None
     return user
 
@@ -209,26 +212,22 @@ def current_permissions(request: Request) -> list[str] | None:
     return _users(request).permissions_for(user)
 
 
-def require_user(request: Request) -> str:
-    if not auth_enabled(request):
-        return "anonymous"
-    user = _live_user(request)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return user.username
-
-
-def require_permission(permission: str):
+def require_permission(permission: str | None):
+    """Dependency: a logged-in user holding `permission` (None = any login).
+    Returns the username, or "anonymous" with auth off."""
     def check(request: Request) -> str:
         if not auth_enabled(request):
             return "anonymous"
         user = _live_user(request)
         if user is None:
             raise HTTPException(status_code=401, detail="Not authenticated")
-        if permission not in _users(request).permissions_for(user):
+        if permission is not None and permission not in _users(request).permissions_for(user):
             raise HTTPException(status_code=403, detail=f"Missing permission: {permission}")
         return user.username
     return check
+
+
+require_user = require_permission(None)
 
 
 def _same_origin(websocket: WebSocket) -> bool:
@@ -242,14 +241,7 @@ def _same_origin(websocket: WebSocket) -> bool:
 
 
 def ws_authorized(websocket: WebSocket) -> bool:
-    if not _same_origin(websocket):
-        return False
-    users = websocket.app.state.users
-    if not users.list():
-        return True
-    username = websocket.session.get("user")
-    user = users.get(username) if username else None
-    return user is not None and user.session_version == websocket.session.get("session_version")
+    return _same_origin(websocket) and (not auth_enabled(websocket) or _live_user(websocket) is not None)
 
 
 # --- users + roles API ------------------------------------------------------
@@ -318,8 +310,7 @@ def create_role(request: Request, body: NewRole) -> Role:
 
 @router.patch("/api/roles/{role_id}", dependencies=manage_roles)
 def update_role(request: Request, role_id: str, body: RoleUpdate) -> Role:
-    if body.name is not None:
-        _validate_role_name(body.name)
+    name = _validate_role_name(body.name) if body.name is not None else None
     # Otherwise a manage_roles-only account just grants itself everything.
     me = _live_user(request)
     if body.permissions is not None and me is not None and me.role == role_id:
@@ -331,7 +322,7 @@ def update_role(request: Request, role_id: str, body: RoleUpdate) -> Role:
             ),
         )
     with _store_errors("role"):
-        return _users(request).update_role(role_id, name=body.name, permissions=body.permissions)
+        return _users(request).update_role(role_id, name=name, permissions=body.permissions)
 
 
 @router.delete("/api/roles/{role_id}", dependencies=manage_roles)

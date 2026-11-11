@@ -15,9 +15,7 @@ import yaml
 
 from .models import ALL_PERMISSIONS, Role, User
 from .security import hash_password, verify_password
-from .utils import atomic_write_text, slugify
-
-ROOT = Path(__file__).resolve().parent.parent
+from .utils import atomic_write_text, data_file, slugify
 
 # Pre-roles files had a bare "admin"/"viewer" string in `role`. Used only by
 # the one-time migration below.
@@ -25,7 +23,7 @@ _LEGACY_ROLE_PERMISSIONS = {"admin": list(ALL_PERMISSIONS), "viewer": []}
 
 
 def default_users_file() -> Path:
-    return Path(os.environ.get("PRINTDECK_USERS") or ROOT / "users.yaml")
+    return data_file("PRINTDECK_USERS", "users.yaml")
 
 
 def _read(path: Path) -> dict:
@@ -109,6 +107,9 @@ class UserStore:
         with self._lock:
             return list(self._by_username.values())
 
+    def has_users(self) -> bool:
+        return bool(self._by_username)
+
     def get(self, username: str) -> User | None:
         return self._by_username.get(username)
 
@@ -178,8 +179,8 @@ class UserStore:
                 raise ValueError(f'A role named "{role.name}" already exists.')
 
     def create_role(self, name: str, permissions: list[str]) -> Role:
+        """`name` arrives validated and stripped (auth._validate_role_name)."""
         with self._lock:
-            name = name.strip()
             self._assert_role_name_free(name)
             role_id = slugify(name)
             base_id, suffix = role_id, 2
@@ -196,13 +197,12 @@ class UserStore:
             role = self._by_role_id.get(role_id)
             if role is None:
                 raise KeyError("role")
-            if name:
-                name = name.strip()
+            if name is not None:
                 self._assert_role_name_free(name, except_id=role_id)
             if permissions is not None:
                 self._assert_recovery_possible(role_permission_overrides={role_id: permissions})
             updated = role.model_copy(update={
-                "name": name if name else role.name,
+                "name": role.name if name is None else name,
                 "permissions": role.permissions if permissions is None else permissions,
             })
             self._by_role_id[role_id] = updated

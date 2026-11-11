@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.routes.common import clean_segments, extract_moonraker_error, relative_path
+from app.routes.printers import camera_url_for_new_host
 
 
 def ok(result):
@@ -59,6 +60,22 @@ def test_update_printer(open_client, data_dir):
     # Persisted.
     text = (data_dir / "printers.yaml").read_text(encoding="utf-8")
     assert "192.168.1.78" in text and "secret" not in text
+
+
+@pytest.mark.parametrize(
+    ("camera_url", "old", "new", "expected"),
+    [
+        ("http://10.0.0.1:8000/", "10.0.0.1", "10.0.0.9", "http://10.0.0.9:8000/"),
+        # A host that merely contains the old one as a substring is left alone.
+        ("http://10.0.0.12:8000/", "10.0.0.1", "10.0.0.9", "http://10.0.0.12:8000/"),
+        ("http://cam.local/", "10.0.0.1", "10.0.0.9", "http://cam.local/"),
+        ("http://user:pw@10.0.0.1:8000/x?y=1", "10.0.0.1", "10.0.0.9", "http://user:pw@10.0.0.9:8000/x?y=1"),
+        ("http://[2001:db8::1]:8000/", "2001:db8::1", "2001:db8::2", "http://[2001:db8::2]:8000/"),
+        ("http://10.0.0.1/", "10.0.0.1", "2001:db8::2", "http://[2001:db8::2]/"),
+    ],
+)
+def test_camera_url_for_new_host(camera_url, old, new, expected):
+    assert camera_url_for_new_host(camera_url, old, new) == expected
 
 
 def test_delete_printer(open_client):

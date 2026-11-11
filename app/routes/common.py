@@ -4,6 +4,7 @@ request wrappers, path hygiene, and the permission dependencies."""
 from __future__ import annotations
 
 import json
+from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import Depends, HTTPException, Request
@@ -61,6 +62,17 @@ def require_plain_name(name: str, what: str) -> str:
 
 # --- Moonraker HTTP ----------------------------------------------------------
 
+def moonraker_url(config: PrinterConfig, path: str, params: dict | None = None) -> str:
+    """Query strings encoded as "path=gcodes/sub%20dir": slashes kept, spaces
+    as %20. httpx's params= would send "gcodes%2Fsub+dir", which Moonraker
+    should decode the same, but this is what every printer here has been
+    tested against (Creality's fork included)."""
+    url = config.http_url(path)
+    if params:
+        url += "?" + urlencode(params, quote_via=quote, safe="/")
+    return url
+
+
 def extract_moonraker_error(response_text: str) -> str:
     """Moonraker wraps errors as {"error": {"message": ...}}, and the message
     is often itself JSON from Klipper ({"code": ..., "msg": ...}). Dig out
@@ -79,11 +91,18 @@ def extract_moonraker_error(response_text: str) -> str:
 
 
 async def moonraker_request(
-    request: Request, config: PrinterConfig, method: str, path: str, *, timeout: float = 30, **kwargs
+    request: Request,
+    config: PrinterConfig,
+    method: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    timeout: float = 30,
+    **kwargs,
 ) -> httpx.Response:
     try:
         resp = await http_client(request).request(
-            method, config.http_url(path), headers=config.auth_headers, timeout=timeout, **kwargs
+            method, moonraker_url(config, path, params), headers=config.auth_headers, timeout=timeout, **kwargs
         )
         resp.raise_for_status()
         return resp

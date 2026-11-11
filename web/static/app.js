@@ -1,8 +1,17 @@
-// Dashboard: one card per printer over /ws, polling fallback. shared.js loads first.
+// Dashboard: one card per printer over /ws, polling fallback.
+
+import { api } from "./lib/api.js";
+import { startCamera, stopCamera, wireCamera } from "./lib/camera.js";
+import { mountChrome } from "./lib/chrome.js";
+import { openModal, submitOnEnter } from "./lib/dialogs.js";
+import { wirePrinterEditor } from "./lib/editor.js";
+import { connectLive } from "./lib/live.js";
+import { displayState, eta, renderCardHeader, renderJobControls, wireJobControls } from "./lib/printer.js";
+
+mountChrome();
 
 const groupsEl = document.getElementById("groups");
 const emptyNote = document.getElementById("empty");
-const connLabel = document.getElementById("conn");
 const cardTemplate = document.getElementById("card-template");
 const groupTemplate = document.getElementById("group-template");
 const searchInput = document.getElementById("search");
@@ -29,7 +38,6 @@ function cardFor(id) {
 
   const toggle = card.querySelector(".cam-toggle");
   const camera = card.querySelector(".camera");
-  const video = card.querySelector(".cam-frame");
   toggle.addEventListener("click", () => {
     const opening = camera.hidden;
     camera.hidden = !opening;
@@ -37,12 +45,7 @@ function cardFor(id) {
     if (opening) startCamera(card, id);
     else stopCamera(card);
   });
-  video.addEventListener("click", () => {
-    if (video.srcObject && document.fullscreenEnabled) video.requestFullscreen();
-  });
-  card.querySelector(".cam-status").addEventListener("click", (event) => {
-    if (event.currentTarget.dataset.state === "error") startCamera(card, id);
-  });
+  wireCamera(card, id);
 
   const thumb = card.querySelector(".job-thumb");
   thumb.addEventListener("load", () => { thumb.hidden = false; });
@@ -57,26 +60,8 @@ function cardFor(id) {
 function render(status) {
   emptyNote.hidden = true;
   const card = cardFor(status.id);
-  card.dataset.host = status.host || "";  // prefill for the editor
-  card.dataset.port = String(status.moonraker_port || 7125);
-  card.dataset.hasApiKey = String(Boolean(status.has_api_key));
-  card.dataset.tls = String(Boolean(status.tls));
-  card.dataset.crealityLight = String(Boolean(status.creality_light));
-  card.dataset.cameraUrl = status.camera_url || "";
-  card.dataset.group = status.group || "";
   card._status = status;
-  const state = displayState(status);  // "complete" reads as idle once dismissed here
-  card.dataset.state = state;
-  card.style.setProperty("--state", STATE_COLOR[state] || STATE_COLOR.offline);
-
-  card.querySelector(".name").textContent = status.name;
-
-  const badge = card.querySelector(".badge");
-  badge.textContent = state;
-
-  card.querySelector(".nozzle").innerHTML = temp(status.extruder_temp, status.extruder_target);
-  card.querySelector(".bed").innerHTML = temp(status.bed_temp, status.bed_target);
-
+  renderCardHeader(card, status);
   renderJob(card, status);
   renderCamera(card, status);
   placeInGroup(card, status.group);
@@ -230,7 +215,7 @@ function applySearchFilter() {
 // The new card arrives via the live feed's "update" event.
 
 document.getElementById("add-printer").addEventListener("click", () => {
-  const { overlay, body } = openModal("Add printer");
+  const { body, close } = openModal("Add printer");
   body.innerHTML = `
     <label class="modal-field">
       <span>Name</span>
@@ -281,11 +266,6 @@ document.getElementById("add-printer").addEventListener("click", () => {
   const errorEl = body.querySelector(".add-printer-error");
   const confirmBtn = body.querySelector(".modal-confirm");
 
-  const close = () => {
-    overlay.remove();
-    document.removeEventListener("keydown", onKey);
-  };
-
   const submit = async () => {
     errorEl.hidden = true;
     const name = nameInput.value.trim();
@@ -318,80 +298,23 @@ document.getElementById("add-printer").addEventListener("click", () => {
     }
   };
 
-  const onKey = (event) => {
-    if (event.key === "Escape") close();
-    // Text fields only; Enter on a button must click that button.
-    if (event.key === "Enter" && event.target.matches("input:not([type=checkbox])")) submit();
-  };
-
-  overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); });
   body.querySelector(".modal-cancel").addEventListener("click", close);
   confirmBtn.addEventListener("click", submit);
-  document.addEventListener("keydown", onKey);
+  submitOnEnter(body.querySelectorAll("input:not([type=checkbox])"), submit);
   nameInput.focus();
 });
 
 // --- live connection -------------------------------------------------------
 
-let pollTimer = null;
-
-function connect() {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  const socket = new WebSocket(`${proto}://${location.host}/ws`);
-
-  socket.addEventListener("open", () => {
-    setConn("open", "Connected to server");
-    stopPolling();
-  });
-
-  socket.addEventListener("message", (event) => {
-    const msg = JSON.parse(event.data);
-    if (msg.type === "snapshot") {
-      if (msg.printers.length === 0) emptyNote.hidden = false;
-      msg.printers.forEach(render);
-    } else if (msg.type === "update") {
-      render(msg.printer);
-    } else if (msg.type === "removed") {
-      removeCard(msg.id);
-    }
-  });
-
-  socket.addEventListener("close", () => {
-    setConn("closed", "Reconnecting to server…");
-    startPolling();
-    setTimeout(connect, 3000);
-  });
-
-  socket.addEventListener("error", () => socket.close());
+// A full list has no "removed" events, so drop cards it stopped mentioning
+// (a printer deleted while the feed was down).
+function renderAll(printers) {
+  const seen = new Set(printers.map((p) => p.id));
+  for (const id of [...cards.keys()]) {
+    if (!seen.has(id)) removeCard(id);
+  }
+  printers.forEach(render);
+  if (printers.length === 0) emptyNote.hidden = false;
 }
 
-function startPolling() {
-  if (pollTimer) return;
-  const tick = async () => {
-    try {
-      const res = await fetch("/api/printers");
-      if (res.status === 401) return void (location.href = "/login");  // session expired
-      const printers = await res.json();
-      const seen = new Set(printers.map((p) => p.id));
-      printers.forEach(render);
-      // Polling has no "removed" event, so drop cards the snapshot stopped mentioning.
-      for (const id of [...cards.keys()]) {
-        if (!seen.has(id)) removeCard(id);
-      }
-    } catch { /* still offline; the next tick will try again */ }
-  };
-  tick();
-  pollTimer = setInterval(tick, 5000);
-}
-
-function stopPolling() {
-  clearInterval(pollTimer);
-  pollTimer = null;
-}
-
-function setConn(state, label) {
-  connLabel.dataset.state = state;
-  connLabel.textContent = label;
-}
-
-connect();
+connectLive({ onFull: renderAll, onUpdate: render, onRemoved: removeCard });

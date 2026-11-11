@@ -1,6 +1,12 @@
 // Users page. Server-gated on manage_users; also bounces client-side so a
 // stale tab doesn't just 403 on every call.
 
+import { api, fetchSession } from "./lib/api.js";
+import { mountChrome } from "./lib/chrome.js";
+import { confirmDialog, promptDialog } from "./lib/dialogs.js";
+
+mountChrome();
+
 const usersList = document.querySelector(".users-list");
 const userRowTemplate = document.getElementById("user-row-template");
 const usersStatus = document.querySelector(".users-status");
@@ -18,9 +24,7 @@ function setStatus(text, isError = false) {
 }
 
 async function loadRoles() {
-  const res = await fetch("/api/roles");
-  if (!res.ok) throw new Error(`error ${res.status}`);
-  roles = await res.json();
+  roles = await (await api("/api/roles")).json();
 }
 
 function populateRoleSelect(select) {
@@ -31,15 +35,13 @@ function populateRoleSelect(select) {
 async function loadUsers() {
   setStatus("Loading…");
   try {
-    const res = await fetch("/api/users");
-    if (res.status === 401) return void (location.href = "/login");
-    if (res.status === 403) return void (location.href = "/");
-    if (!res.ok) throw new Error(`error ${res.status}`);
-    const users = await res.json();
+    const users = await (await api("/api/users")).json();
     usersList.innerHTML = "";
     for (const user of users) usersList.append(userRow(user));
     setStatus("");
   } catch (err) {
+    if (err.status === 401) return void (location.href = "/login");
+    if (err.status === 403) return void (location.href = "/");
     setStatus(`Couldn't load users: ${err.message}`, true);
   }
 }

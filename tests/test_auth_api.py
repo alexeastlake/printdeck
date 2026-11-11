@@ -118,6 +118,16 @@ def test_password_change_invalidates_existing_session(admin_client, viewer_clien
     assert viewer_client.get("/api/printers").status_code == 401
 
 
+def test_password_change_closes_websocket_door(admin_client, viewer_client):
+    with viewer_client.websocket_connect("/ws") as ws:
+        assert ws.receive_json()["type"] == "snapshot"
+    assert admin_client.patch("/api/users/viewer", json={"password": "changed-pass1"}).status_code == 200
+    # Same cookie, stale session_version: the handshake is refused.
+    with pytest.raises(WebSocketDisconnect):
+        with viewer_client.websocket_connect("/ws"):
+            pass
+
+
 def test_deleting_a_user_kicks_them(admin_client, viewer_client):
     assert admin_client.delete("/api/users/viewer").status_code == 200
     assert viewer_client.get("/api/printers").status_code == 401

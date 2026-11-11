@@ -4,7 +4,6 @@ metadata and thumbnails. Everything is confined to the gcodes root."""
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from urllib.parse import quote
 
@@ -13,6 +12,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, Response, Upl
 from pydantic import BaseModel, Field
 
 from ..models import PrinterConfig
+from ..moonraker import rpc
 from .common import (
     FILES_ROOT,
     clean_segments,
@@ -23,6 +23,7 @@ from .common import (
     moonraker_json,
     moonraker_request,
     moonraker_result,
+    moonraker_url,
     relative_path,
     require_config,
     require_plain_name,
@@ -44,18 +45,13 @@ class RenameEntry(BaseModel):
     new_name: str = Field(max_length=255)  # rename in place only
 
 
-def _quoted(path: str) -> str:
-    return quote(path, safe="/")
-
-
 # --- browse / mutate ---------------------------------------------------------
 
 @router.get("/printers/{printer_id}/files")
 async def list_files(request: Request, printer_id: str, path: str = "") -> dict:
     config = require_config(request, printer_id)
-    return await moonraker_result(
-        request, config, "GET", f"/server/files/directory?path={_quoted(relative_path(path))}"
-    )
+    params = {"path": relative_path(path)}
+    return await moonraker_result(request, config, "GET", "/server/files/directory", params=params)
 
 
 @router.post("/printers/{printer_id}/files/folder", dependencies=manage_files_only)
@@ -93,21 +89,8 @@ async def delete_file_via_rpc(config: PrinterConfig, path: str) -> dict:
             async with websockets.connect(
                 config.ws_url, additional_headers=config.auth_headers, open_timeout=10
             ) as ws:
-                await ws.send(json.dumps({
-                    "jsonrpc": "2.0",
-                    "method": "server.files.delete_file",
-                    "params": {"path": path},
-                    "id": 1,
-                }))
                 try:
-                    async with asyncio.timeout(15):
-                        while True:
-                            msg = json.loads(await ws.recv())
-                            if msg.get("id") != 1:
-                                continue
-                            if "error" in msg:
-                                raise RuntimeError(msg["error"].get("message") or "Moonraker refused the delete")
-                            return msg.get("result", {})
+                    return await rpc(ws, "server.files.delete_file", {"path": path}, timeout=15)
                 except TimeoutError:
                     # asyncio's TimeoutError has an empty message; say what happened.
                     raise TimeoutError("the printer didn't confirm the delete within 15s") from None
@@ -122,7 +105,7 @@ async def _file_exists(request: Request, config: PrinterConfig, path: str) -> bo
     """None if we can't tell (printer unreachable)."""
     try:
         resp = await http_client(request).get(
-            config.http_url(f"/server/files/metadata?filename={quote(path, safe='/')}"),
+            moonraker_url(config, "/server/files/metadata", {"filename": path}),
             headers=config.auth_headers, timeout=10,
         )
     except Exception:
@@ -132,11 +115,12 @@ async def _file_exists(request: Request, config: PrinterConfig, path: str) -> bo
     return True if resp.is_success else None
 
 
-async def _delete_file(request: Request, config: PrinterConfig, full_path: str) -> dict:
+async def _delete_file(request: Request, config: PrinterConfig, segments: list[str]) -> dict:
     """RPC first (see delete_file_via_rpc), then the REST endpoint, then check
     whether the file is gone regardless of what the printer said. Creality's
     Moonraker fork has been seen to delete and then never reply."""
-    relative = full_path[len(FILES_ROOT) + 1:]
+    full_path = join_root(segments)
+    relative = "/".join(segments)
     errors: list[str] = []
     try:
         return await delete_file_via_rpc(config, full_path)
@@ -166,12 +150,11 @@ async def delete_entry(request: Request, printer_id: str, path: str, is_dir: boo
     segments = clean_segments(path)
     if not segments:
         raise HTTPException(status_code=400, detail="Can't delete the gcodes root.")
-    full_path = join_root(segments)
     if is_dir:
         return await moonraker_json(
-            request, config, "DELETE", f"/server/files/directory?path={_quoted(full_path)}&force=true"
+            request, config, "DELETE", "/server/files/directory", params={"path": join_root(segments), "force": "true"}
         )
-    return await _delete_file(request, config, full_path)
+    return await _delete_file(request, config, segments)
 
 
 @router.post("/printers/{printer_id}/files/upload", dependencies=manage_files_only)
@@ -202,9 +185,8 @@ async def upload_file(
 # Moonraker parses thumbnails and slicer comments at upload time; these just proxy.
 
 async def _metadata(request: Request, config: PrinterConfig, segments: list[str]) -> dict:
-    return await moonraker_result(
-        request, config, "GET", f"/server/files/metadata?filename={_quoted('/'.join(segments))}"
-    )
+    params = {"filename": "/".join(segments)}
+    return await moonraker_result(request, config, "GET", "/server/files/metadata", params=params)
 
 
 @router.get("/printers/{printer_id}/files/info")
@@ -227,7 +209,7 @@ async def file_thumbnail(request: Request, printer_id: str, filename: str) -> Re
     # relative_path comes from the printer, but it still goes into a URL we build.
     thumb_segments = segments[:-1] + clean_segments(str(largest.get("relative_path", "")), "thumbnail path")
     thumb_path = join_root(thumb_segments)
-    resp = await moonraker_request(request, config, "GET", f"/server/files/{_quoted(thumb_path)}", timeout=15)
+    resp = await moonraker_request(request, config, "GET", f"/server/files/{quote(thumb_path, safe='/')}", timeout=15)
     content_type = "image/png" if thumb_path.lower().endswith(".png") else "image/jpeg"
     # Rows in the file and history lists each fetch one; a short cache stops
     # a re-render refetching them all.

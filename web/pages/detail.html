@@ -170,7 +170,7 @@
             </div>
             <div class="control-row temp-row">
               <span class="control-label">Nozzle</span>
-              <!-- max is overwritten with Klipper's max_temp once known (detail.js). -->
+              <!-- max is overwritten with Klipper's max_temp once known (detail/controls.js). -->
               <input class="extruder-target-input" type="number" min="0" max="300" step="1" inputmode="numeric" autocomplete="off">
               <span class="control-unit">°C</span>
               <div class="control-buttons">
@@ -189,7 +189,7 @@
             </div>
           </div>
 
-          <!-- Rows built from whatever fans the printer reports (detail.js). -->
+          <!-- Rows built from whatever fans the printer reports (detail/controls.js). -->
           <div class="control-block fan-block">
             <div class="graph-block">
               <div class="graph-legend fan-legend"></div>
@@ -211,7 +211,7 @@
             </div>
             <div class="fan-rows"></div>
 
-            <!-- Only shown when the printer reports a light (detail.js). Lives
+            <!-- Only shown when the printer reports a light (detail/controls.js). Lives
                  in the fan column so the controls grid stays three across. -->
             <div class="light-block" hidden>
               <p class="control-block-title">Lights</p>
@@ -381,7 +381,6 @@
     </div>
   </template>
 
-  <script src="/static/shared.js"></script>
-  <script src="/static/detail.js"></script>
+  <script type="module" src="/static/detail/main.js"></script>
 </body>
 </html>

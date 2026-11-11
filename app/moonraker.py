@@ -60,6 +60,23 @@ _ID_OBJECT_LIST = 2
 _ID_CONFIG_QUERY = 3
 
 
+async def rpc(ws, method: str, params: dict | None = None, *, request_id: int = 1, timeout: float = 5) -> dict:
+    """One JSON-RPC call on an open Moonraker websocket. Push notifications
+    can interleave, so read until our id comes back. Raises RuntimeError with
+    Moonraker's message if it refuses, TimeoutError if it never answers."""
+    message: dict = {"jsonrpc": "2.0", "method": method, "id": request_id}
+    if params is not None:
+        message["params"] = params
+    await ws.send(json.dumps(message))
+    async with asyncio.timeout(timeout):
+        while True:
+            msg = json.loads(await ws.recv())
+            if msg.get("id") == request_id:
+                if "error" in msg:
+                    raise RuntimeError(msg["error"].get("message") or f"Moonraker refused {method}")
+                return msg.get("result", {})
+
+
 class MoonrakerClient:
     def __init__(self, config: PrinterConfig) -> None:
         self.config = config
@@ -98,26 +115,11 @@ class MoonrakerClient:
                 self._merge(changed)
                 yield self._objects
 
-    @staticmethod
-    async def _rpc(ws, method: str, params: dict | None, request_id: int, timeout: float = 5) -> dict:
-        # Push notifications can interleave; read until our id comes back.
-        message: dict = {"jsonrpc": "2.0", "method": method, "id": request_id}
-        if params is not None:
-            message["params"] = params
-        await ws.send(json.dumps(message))
-        async with asyncio.timeout(timeout):
-            while True:
-                msg = json.loads(await ws.recv())
-                if msg.get("id") == request_id:
-                    if "error" in msg:
-                        raise RuntimeError(msg["error"].get("message", method))
-                    return msg.get("result", {})
-
     async def _objects_to_subscribe(self, ws) -> dict[str, None]:
         # Klipper has no fixed fan list (any number of [fan_generic X]), so ask.
         objects = dict(SUBSCRIBED_OBJECTS)
         try:
-            result = await self._rpc(ws, "printer.objects.list", None, _ID_OBJECT_LIST)
+            result = await rpc(ws, "printer.objects.list", request_id=_ID_OBJECT_LIST)
             for name in result.get("objects", []):
                 if name == "fan" or name.startswith("fan_generic ") or is_light_object(name):
                     objects[name] = None
@@ -130,9 +132,8 @@ class MoonrakerClient:
         # enforces it regardless. One-off query: a config change restarts
         # Klipper, which reconnects us.
         try:
-            result = await self._rpc(
-                ws, "printer.objects.query",
-                {"objects": {"configfile": ["settings"]}}, _ID_CONFIG_QUERY,
+            result = await rpc(
+                ws, "printer.objects.query", {"objects": {"configfile": ["settings"]}}, request_id=_ID_CONFIG_QUERY,
             )
             settings = result.get("status", {}).get("configfile", {}).get("settings", {})
             for section, key in (("extruder", "extruder_max_temp"), ("heater_bed", "bed_max_temp")):
@@ -434,8 +435,10 @@ class PrinterManager:
 
         if any(getattr(new, key) != getattr(old, key) for key in _CONNECTION_KEYS):
             # Old task down before the new one up, never two per printer.
+            # Published here too (the new task opens with the same) so the
+            # status returned below is already the new connection's.
             await self._despawn(printer_id)
-            self._publish(offline_status(new))
+            self._publish(connecting_status(new))
             self._spawn(new)
         else:
             current = self._status[printer_id]

@@ -5,6 +5,13 @@ import re
 import tempfile
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent  # repo root; data files default to here
+
+
+def data_file(env_var: str, filename: str) -> Path:
+    """$env_var if set (Docker points these at /data), else <repo>/<filename>."""
+    return Path(os.environ.get(env_var) or ROOT / filename)
+
 
 def slugify(name: str) -> str:
     """"K1C (garage)" -> "k1c-garage". Used for printer and role ids."""

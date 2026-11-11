@@ -10,7 +10,7 @@
   <script src="/static/theme-init.js"></script>
 </head>
 <body>
-  <!-- Filled by shared.js mountTopbar(); data-* attributes pick the extras. -->
+  <!-- Filled by lib/chrome.js mountChrome(); data-* attributes pick the extras. -->
   <header class="topbar" data-conn data-add-printer></header>
 
   <main>
@@ -136,7 +136,6 @@
     </details>
   </template>
 
-  <script src="/static/shared.js"></script>
-  <script src="/static/app.js"></script>
+  <script type="module" src="/static/app.js"></script>
 </body>
 </html>

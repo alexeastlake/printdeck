@@ -50,11 +50,35 @@ def test_static_version_changes_with_content(tmp_path):
     assert static_version(tmp_path) != v1
 
 
+_MODULE_IMPORT = re.compile(r'^\s*(?:import|export)\b[^"\']*?from\s*["\'](\.{1,2}/[^"\']+)["\']', re.MULTILINE)
+
+
 def test_every_page_script_exists(open_client):
-    """A typo'd asset path would otherwise only show up as a blank page."""
+    """A typo'd asset path, or a module importing a file that isn't there,
+    would otherwise only show up as a blank page. Follows relative ES-module
+    imports, which resolve under the same versioned prefix."""
     version = static_version(STATIC_DIR)
+    seen: set[str] = set()
     for url in ("/", "/printer/k1c", "/users", "/roles", "/login"):
         html = open_client.get(url).text
-        for asset in re.findall(r'(?:src|href)="(/static/[^"]+)"', html):
-            assert open_client.get(asset).status_code == 200, (url, asset)
-            assert asset.startswith(f"/static/{version}/")
+        pending = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
+        while pending:
+            asset = pending.pop()
+            if asset in seen:
+                continue
+            seen.add(asset)
+            r = open_client.get(asset)
+            assert r.status_code == 200, (url, asset)
+            assert asset.startswith(f"/static/{version}/"), asset
+            if asset.endswith(".js"):
+                base = asset.rsplit("/", 1)[0]
+                for spec in _MODULE_IMPORT.findall(r.text):
+                    parts = base.split("/")
+                    for segment in spec.split("/"):
+                        if segment == "..":
+                            parts.pop()
+                        elif segment != ".":
+                            parts.append(segment)
+                    pending.append("/".join(parts))
+    # The detail page is split into modules; make sure the walk reached them.
+    assert f"/static/{version}/detail/history.js" in seen

@@ -164,7 +164,7 @@ def create_app(*, printers_file: Path | None = None, users_file: Path | None = N
 
     @app.get("/printer/{printer_id}", include_in_schema=False)
     def printer_detail(request: Request, printer_id: str):
-        # Generic page; detail.js reads the id from location.pathname.
+        # Generic page; detail/page.js reads the id from location.pathname.
         return _page(request, "detail.html")
 
     @app.get("/users", include_in_schema=False)

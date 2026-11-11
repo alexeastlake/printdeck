@@ -1,6 +1,12 @@
 // Roles page. Server-gated on manage_roles; also bounces client-side so a
 // stale tab doesn't just 403 on every call.
 
+import { api, fetchSession } from "./lib/api.js";
+import { mountChrome } from "./lib/chrome.js";
+import { confirmDialog, openModal, submitOnEnter } from "./lib/dialogs.js";
+
+mountChrome();
+
 const rolesList = document.querySelector(".roles-list");
 const roleRowTemplate = document.getElementById("role-row-template");
 const rolesStatus = document.querySelector(".roles-status");
@@ -18,9 +24,7 @@ function setStatus(text, isError = false) {
 }
 
 async function loadPermissionCatalog() {
-  const res = await fetch("/api/permissions");
-  if (!res.ok) throw new Error(`error ${res.status}`);
-  permissionCatalog = await res.json();
+  permissionCatalog = await (await api("/api/permissions")).json();
 }
 
 // Catalog comes from the backend (trusted), so an HTML string is fine here.
@@ -45,15 +49,13 @@ function permissionLabels(ids) {
 async function loadRoles() {
   setStatus("Loading…");
   try {
-    const res = await fetch("/api/roles");
-    if (res.status === 401) return void (location.href = "/login");
-    if (res.status === 403) return void (location.href = "/");
-    if (!res.ok) throw new Error(`error ${res.status}`);
-    const roles = await res.json();
+    const roles = await (await api("/api/roles")).json();
     rolesList.innerHTML = "";
     for (const role of roles) rolesList.append(roleRow(role));
     setStatus("");
   } catch (err) {
+    if (err.status === 401) return void (location.href = "/login");
+    if (err.status === 403) return void (location.href = "/");
     setStatus(`Couldn't load roles: ${err.message}`, true);
   }
 }
@@ -85,7 +87,7 @@ function roleRow(role) {
 }
 
 function openEditRoleDialog(role) {
-  const { overlay, body } = openModal(`Edit "${role.name}"`);
+  const { body, close } = openModal(`Edit "${role.name}"`);
   body.innerHTML = `
     <label class="modal-field">
       <span>Name</span>
@@ -107,11 +109,6 @@ function openEditRoleDialog(role) {
   const confirmBtn = body.querySelector(".modal-confirm");
   nameInput.value = role.name;
 
-  const close = () => {
-    overlay.remove();
-    document.removeEventListener("keydown", onKey);
-  };
-
   const submit = async () => {
     errorEl.hidden = true;
     const name = nameInput.value.trim();
@@ -132,11 +129,9 @@ function openEditRoleDialog(role) {
     }
   };
 
-  const onKey = (event) => { if (event.key === "Escape") close(); };
-  overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); });
   body.querySelector(".modal-cancel").addEventListener("click", close);
   confirmBtn.addEventListener("click", submit);
-  document.addEventListener("keydown", onKey);
+  submitOnEnter([nameInput], submit);
   nameInput.focus();
 }
 

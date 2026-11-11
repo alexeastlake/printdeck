@@ -282,8 +282,18 @@ main { padding: 1.5rem; }
 .card:hover {
   box-shadow: 0 2px 4px rgba(0, 0, 0, .08), 0 8px 20px rgba(0, 0, 0, .08);
 }
+/* --state drives the badge, dot, progress bar, and card edge. JS sets only
+   data-state; unknown states fall back to offline. */
+:is(.card, #detail-card) { --state: var(--offline); }
+:is(.card, #detail-card)[data-state="idle"] { --state: var(--idle); }
+:is(.card, #detail-card)[data-state="printing"] { --state: var(--printing); }
+:is(.card, #detail-card)[data-state="paused"] { --state: var(--paused); }
+:is(.card, #detail-card)[data-state="complete"] { --state: var(--complete); }
+:is(.card, #detail-card)[data-state="error"] { --state: var(--error); }
+:is(.card, #detail-card)[data-state="connecting"] { --state: var(--connecting); }
+
 /* a quiet left edge that picks up the printer's state colour */
-.card { border-left: 3px solid var(--state, var(--offline)); }
+.card { border-left: 3px solid var(--state); }
 /* Errors get a tinted background, not just a badge. */
 .card[data-state="error"] {
   background: color-mix(in srgb, var(--error) 7%, var(--surface));
@@ -1364,7 +1374,7 @@ body:not(.can-manage-files) .history-entry {
 
 /* --- missing permissions: hide controls that would just 403 --- */
 /* The server is the real gate; this just hides buttons that would 403.
-   body gets one .can-<permission> class per permission (shared.js).
+   body gets one .can-<permission> class per permission (lib/chrome.js).
    :not() keeps them hidden until that lands, so nothing flashes. */
 body:not(.can-manage-printers) .edit-toggle,
 body:not(.can-manage-printers) .add-printer-btn,

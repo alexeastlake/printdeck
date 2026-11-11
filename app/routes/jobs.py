@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -61,8 +60,8 @@ async def start_print(request: Request, printer_id: str, body: StartPrint) -> di
     status = request.app.state.manager.status(printer_id)
     if status is not None and status.state in ("printing", "paused"):
         raise HTTPException(status_code=409, detail="A print is already running on this printer.")
-    filename = quote("/".join(segments), safe="/")
-    return await _ok_result(request, config, f"/printer/print/start?filename={filename}", timeout=30)
+    params = {"filename": "/".join(segments)}
+    return await _ok_result(request, config, "/printer/print/start", params=params, timeout=30)
 
 
 @router.post("/printers/{printer_id}/job/{action}", dependencies=control_printers_only)
@@ -84,9 +83,8 @@ async def job_history(request: Request, printer_id: str, limit: int = 25, start:
     config = require_config(request, printer_id)
     limit = max(1, min(limit, HISTORY_PAGE_MAX))
     start = max(0, start)
-    return await moonraker_result(
-        request, config, "GET", f"/server/history/list?limit={limit}&start={start}&order=desc"
-    )
+    params = {"limit": limit, "start": start, "order": "desc"}
+    return await moonraker_result(request, config, "GET", "/server/history/list", params=params)
 
 
 @router.get("/printers/{printer_id}/history/totals")
@@ -100,13 +98,13 @@ async def delete_history_job(request: Request, printer_id: str, job_id: str) -> 
     config = require_config(request, printer_id)
     if not _JOB_ID_RE.match(job_id):
         raise HTTPException(status_code=400, detail="Invalid job id.")
-    return {"deleted": await moonraker_result(request, config, "DELETE", f"/server/history/job?uid={job_id}")}
+    return {"deleted": await moonraker_result(request, config, "DELETE", "/server/history/job", params={"uid": job_id})}
 
 
 @router.delete("/printers/{printer_id}/history", dependencies=manage_files_only)
 async def clear_history(request: Request, printer_id: str) -> dict:
     config = require_config(request, printer_id)
-    return {"deleted": await moonraker_result(request, config, "DELETE", "/server/history/job?all=true")}
+    return {"deleted": await moonraker_result(request, config, "DELETE", "/server/history/job", params={"all": "true"})}
 
 
 # --- Creality chamber light ----------------------------------------------------
