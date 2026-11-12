@@ -26,8 +26,8 @@ log = logging.getLogger("printdeck.moonraker")
 
 
 # Klipper can restart under an open websocket and silently drop our
-# subscription. If nothing arrives for this long, re-subscribe; the reply is
-# a full snapshot. During a print updates are constant, so this never fires.
+# subscription. If no status arrives for this long, re-subscribe; the reply
+# is a full snapshot. During a print updates are constant, so this never fires.
 RESUBSCRIBE_AFTER = 20.0
 
 # None = all fields. Extra fans are discovered per connection.
@@ -103,15 +103,34 @@ class MoonrakerClient:
             objects = await self._objects_to_subscribe(ws)
             await self._read_limits(ws)
             await ws.send(json.dumps(self._subscribe_request(objects)))
+            # Time since the last *status*, not the last message: Moonraker
+            # pushes notify_proc_stat_update every second regardless, so a
+            # plain recv timeout never fires and a dropped subscription
+            # would leave the card frozen on whatever it last showed.
+            last_status = time.monotonic()
             while True:
-                try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=RESUBSCRIBE_AFTER)
-                except TimeoutError:
+                msg = None
+                wait = RESUBSCRIBE_AFTER - (time.monotonic() - last_status)
+                if wait > 0:
+                    try:
+                        msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=wait))
+                    except TimeoutError:
+                        pass
+                if msg is None or msg.get("method") == "notify_klippy_ready":
+                    # Stale, or Klipper just came back (which is when the
+                    # subscription goes): ask again, the reply is a snapshot.
                     await ws.send(json.dumps(self._subscribe_request(objects)))
+                    last_status = time.monotonic()
                     continue
-                changed = self._extract_status(json.loads(raw))
+                if msg.get("method") == "notify_klippy_disconnected":
+                    raise ConnectionError("Klipper disconnected")
+                if msg.get("id") == _ID_SUBSCRIBE and "error" in msg:
+                    # Klipper isn't up; the caller retries with backoff.
+                    raise RuntimeError(msg["error"].get("message") or "Moonraker refused the subscription")
+                changed = self._extract_status(msg)
                 if changed is None:
                     continue
+                last_status = time.monotonic()
                 self._merge(changed)
                 yield self._objects
 

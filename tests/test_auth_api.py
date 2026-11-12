@@ -46,6 +46,9 @@ def test_anonymous_is_bounced(anon_client):
     with pytest.raises(WebSocketDisconnect):
         with anon_client.websocket_connect("/ws"):
             pass
+    with pytest.raises(WebSocketDisconnect):
+        with anon_client.websocket_connect("/ws/camera/k1c"):
+            pass
 
 
 def test_login_wrong_password_and_success(anon_client):

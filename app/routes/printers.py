@@ -88,7 +88,7 @@ def validate_port(port: int) -> int:
 
 
 def validate_camera_url(url: str | None) -> str | None:
-    # The server POSTs to this (see camera.negotiate), so treat it as an SSRF target.
+    # The server POSTs to this (see camera_relay.exchange_sdp), so treat it as an SSRF target.
     url = (url or "").strip()
     if not url:
         return None

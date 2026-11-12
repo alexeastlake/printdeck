@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
+from app import moonraker
 from app.models import PrinterConfig
 from app.moonraker import (
     SUBSCRIBER_QUEUE_SIZE,
@@ -128,6 +130,61 @@ def test_extract_status_and_merge():
     client._merge({"extruder": {"temperature": 20, "target": 0}})
     client._merge({"extruder": {"temperature": 25}})  # partial update keeps target
     assert client._objects == {"extruder": {"temperature": 25, "target": 0}}
+
+
+class FakeMoonrakerSocket:
+    """Answers every request; each subscribe reply is a snapshot, "standby"
+    the first time and "printing" after. Between replies it does what a real
+    Moonraker does with no subscription: one notify_proc_stat_update after another."""
+
+    def __init__(self):
+        self.subscribes = 0
+        self.inbox: asyncio.Queue[str] = asyncio.Queue()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def send(self, raw):
+        msg = json.loads(raw)
+        result = {}
+        if msg["method"] == "printer.objects.subscribe":
+            self.subscribes += 1
+            result = {"status": {"print_stats": {"state": "standby" if self.subscribes == 1 else "printing"}}}
+        self.inbox.put_nowait(json.dumps({"id": msg["id"], "result": result}))
+
+    async def recv(self):
+        try:
+            return await asyncio.wait_for(self.inbox.get(), 0.01)
+        except TimeoutError:
+            return json.dumps({"method": "notify_proc_stat_update", "params": [{}]})
+
+
+def test_stream_resubscribes_when_status_stops_but_other_messages_keep_coming(monkeypatch):
+    # Klipper restarting drops the subscription while Moonraker keeps pushing
+    # proc stats every second; the card used to freeze on its last state.
+    socket = FakeMoonrakerSocket()
+    monkeypatch.setattr(moonraker.websockets, "connect", lambda *args, **kwargs: socket)
+    monkeypatch.setattr(moonraker, "RESUBSCRIBE_AFTER", 0.2)
+
+    async def scenario():
+        stream = MoonrakerClient(CFG).stream()
+        assert (await anext(stream))["print_stats"]["state"] == "standby"
+        assert (await asyncio.wait_for(anext(stream), 5))["print_stats"]["state"] == "printing"
+        assert socket.subscribes == 2
+        # Klipper announcing it's back asks again without waiting out the timer...
+        monkeypatch.setattr(moonraker, "RESUBSCRIBE_AFTER", 60)
+        socket.inbox.put_nowait(json.dumps({"method": "notify_klippy_ready"}))
+        await asyncio.wait_for(anext(stream), 5)
+        assert socket.subscribes == 3
+        # ...and Klipper going away ends the stream, so the manager shows offline and retries.
+        socket.inbox.put_nowait(json.dumps({"method": "notify_klippy_disconnected"}))
+        with pytest.raises(ConnectionError):
+            await asyncio.wait_for(anext(stream), 5)
+
+    asyncio.run(scenario())
 
 
 # --- manager ---------------------------------------------------------------

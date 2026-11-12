@@ -19,6 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import auth, routes
+from .camera_relay import CameraRelays
 from .config import default_printers_file, load_printers
 from .moonraker import PrinterManager
 from .users_store import UserStore, default_users_file, load_or_bootstrap
@@ -36,7 +37,6 @@ CONTENT_SECURITY_POLICY = "; ".join([
     "script-src 'self'",
     "style-src 'self'",
     "img-src 'self' data:",  # data: for the select arrow in style.css
-    "media-src 'self' blob:",
     "connect-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
@@ -113,10 +113,12 @@ def create_app(*, printers_file: Path | None = None, users_file: Path | None = N
         app.state.manager = manager
         app.state.users = UserStore(users_file, session_secret, initial_users, initial_roles)
         app.state.http = httpx.AsyncClient()  # shared pool; timeouts are per call
+        app.state.cameras = CameraRelays()
         await manager.start()
         try:
             yield
         finally:
+            await app.state.cameras.close()
             await manager.stop()
             await app.state.http.aclose()
 

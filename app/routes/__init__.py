@@ -10,9 +10,11 @@ from fastapi import APIRouter
 from . import camera, files, jobs, live, printers
 
 api_router = APIRouter(prefix="/api")
-for module in (printers, camera, files, jobs):
+for module in (printers, files, jobs):
     api_router.include_router(module.router)
 
-ws_router = live.router
+ws_router = APIRouter()
+for module_router in (live.router, camera.ws_router):
+    ws_router.include_router(module_router)
 
 __all__ = ["api_router", "ws_router"]

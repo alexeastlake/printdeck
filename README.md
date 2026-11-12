@@ -10,6 +10,7 @@ app/                 FastAPI backend
   config.py          printers.yaml
   models.py          PrinterConfig, PrinterStatus, User, Role, permissions
   moonraker.py       per-printer websocket client + status normalisation
+  camera_relay.py    server-side WebRTC viewer that passes the camera on as H.264 (or JPEG) frames
   routes/            printers, camera, files, jobs (+history, gcode), live (/ws); common.py has the Moonraker helpers
   auth.py            login, sessions, permission checks, users + roles API
   users_store.py     users.yaml
@@ -89,8 +90,10 @@ many IPs still hits the per-user limit.
 - Plain HTTP. Put it behind an HTTPS reverse proxy before leaving the LAN.
 - Behind a proxy, set `FORWARDED_ALLOW_IPS` (Docker: `PRINTDECK_FORWARDED_ALLOW_IPS`)
   to the proxy's IP or the rate limiter sees only the proxy.
-- The camera stream comes straight from the printer's own server on `:8000`,
-  which has no auth. Moonraker is only reached through PrintDeck.
+- The browser only ever talks to PrintDeck. Moonraker and the camera (whose
+  own server on `:8000` has no auth) are reached by PrintDeck on the LAN, so
+  nothing but PrintDeck needs exposing. The proxy must pass websockets: the
+  live feed (`/ws`) and the camera (`/ws/camera/<id>`) both use them.
 
 ## Printer connection
 
@@ -149,8 +152,14 @@ pull instead of build.
 
 ## Features
 
-- **Camera**: WebRTC, handshake relayed through `/api/printers/<id>/camera/offer`
-  to dodge CORS, video peer-to-peer from the printer. Click for fullscreen.
+- **Camera**: PrintDeck connects to the printer's WebRTC camera itself and
+  passes the video down `/ws/camera/<id>`. Works the same on the LAN and
+  through a tunnel. One connection to the printer is shared by all viewers
+  and closed when the last one leaves. Click for fullscreen.
+  - Over HTTPS (or on localhost) the browser gets the printer's own H.264,
+    untouched: 1080p, ~15 fps, ~140 KB/s per viewer, decoded with WebCodecs.
+  - Over plain HTTP browsers don't offer WebCodecs, so PrintDeck transcodes
+    to 720p JPEG frames instead: up to 10 fps, ~400 KB/s per viewer.
 - **Editor (⚙)**: name, host, port, API key, TLS, Creality light, camera URL, group. Host
   changes reconnect live and rewrite the camera URL if it embedded the old
   host.

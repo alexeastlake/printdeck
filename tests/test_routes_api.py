@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from contextlib import asynccontextmanager
+from fractions import Fraction
 
+import av
 import httpx
 import pytest
 from fastapi import HTTPException
+from starlette.websockets import WebSocketDisconnect
 
+from app.camera_relay import (
+    MAX_BACKLOG,
+    CameraError,
+    CameraRelay,
+    _JpegEncoder,
+    _JpegTranscoder,
+    answer_from_printer,
+    offer_for_printer,
+    starts_with_keyframe,
+)
 from app.routes.common import clean_segments, extract_moonraker_error, relative_path
 from app.routes.printers import camera_url_for_new_host
 
@@ -211,20 +226,131 @@ def test_file_info_passthrough(open_client, fake_moonraker):
     assert str(fake_moonraker.last.url).endswith("/server/files/metadata?filename=a%20b.gcode")
 
 
-def test_camera_offer_relay(open_client, fake_moonraker):
-    import base64
+def test_camera_sdp_fixups():
+    # The printer ignores every candidate if one line ends "typ host\r".
+    offer = "v=0\r\na=candidate:ab 1 udp 2130706431 192.168.1.9 5000 typ host\r\na=ice-ufrag:x\r\n"
+    assert offer_for_printer(offer) == (
+        "v=0\r\na=candidate:ab 1 udp 2130706431 192.168.1.9 5000 typ host generation 0\r\na=ice-ufrag:x\r\n"
+    )
+    # Its second fmtp line for the same payload type would hide packetization-mode.
+    answer = "a=fmtp:0 profile-level-id=42e01f;packetization-mode=1\r\na=fmtp:0 x-google-max-bitrate=6000\r\na=rtpmap:0 H264/90000\r\n"
+    assert answer_from_printer(answer) == "a=fmtp:0 profile-level-id=42e01f;packetization-mode=1\r\na=rtpmap:0 H264/90000\r\n"
 
-    def answer(request):
-        offer = json.loads(base64.b64decode(request.content))
-        assert offer == {"type": "offer", "sdp": "v=0 fake"}
-        return httpx.Response(200, content=base64.b64encode(json.dumps({"type": "answer", "sdp": "v=0 reply"}).encode()))
 
-    fake_moonraker.on("/call/webrtc_local", answer)
-    r = open_client.post("/api/printers/k1c/camera/offer", json={"sdp": "v=0 fake"})
-    assert r.status_code == 200 and r.json()["sdp"] == "v=0 reply"
-    assert str(fake_moonraker.last.url) == "http://192.168.1.50:8000/call/webrtc_local"
+def test_camera_jpeg_encoder_scales_and_keeps_going():
+    encoder = _JpegEncoder()
+    sizes = []
+    for pts in (0, 9000, 18000):  # RTP clock, as frames arrive from the printer
+        frame = av.VideoFrame(1920, 1080, "yuv420p")
+        frame.pts, frame.time_base = pts, Fraction(1, 90000)
+        jpeg = encoder.encode(frame)
+        assert jpeg[:2] == b"\xff\xd8" and jpeg[-2:] == b"\xff\xd9"
+        decoded = next(iter(av.CodecContext.create("mjpeg", "r").decode(av.Packet(jpeg))))
+        sizes.append((decoded.width, decoded.height))
+    assert sizes == [(1280, 720)] * 3
+
+
+def test_starts_with_keyframe():
+    assert starts_with_keyframe(b"\x00\x00\x00\x01\x67\x4d\x00\x29")  # SPS first
+    assert starts_with_keyframe(b"\x00\x00\x01\x65\x88")  # bare IDR
+    assert not starts_with_keyframe(b"\x00\x00\x00\x01\x41\x9a")  # delta
+    # The printer's first frame after connecting: deltas, then the keyframe.
+    assert not starts_with_keyframe(b"\x00\x00\x00\x01\x41\x9a\x00\x00\x00\x01\x67\x4d")
+    assert not starts_with_keyframe(b"") and not starts_with_keyframe(b"\x00\x00\x01")
+
+
+def test_camera_relay_h264_viewers_always_start_on_a_keyframe():
+    async def scenario():
+        relay = CameraRelay(None, "http://cam/")
+        early = relay.frames("h264")
+        first = asyncio.ensure_future(anext(early))
+        await asyncio.sleep(0)  # let it register
+        relay._publish_h264(False, b"d0")  # before any keyframe: undecodable, not sent
+        relay._publish_h264(True, b"K1")
+        relay._publish_h264(False, b"d1")
+        assert await first == b"\x01K1" and await anext(early) == b"\x00d1"
+        # A late joiner is caught up from the last keyframe instead of waiting for the next.
+        late = relay.frames("h264")
+        assert [await anext(late), await anext(late)] == [b"\x01K1", b"\x00d1"]
+        # A viewer that stops reading is skipped ahead to the next keyframe, never fed a gap.
+        for _ in range(MAX_BACKLOG + 5):
+            relay._publish_h264(False, b"d")
+        relay._publish_h264(True, b"K2")
+        assert await anext(late) == b"\x01K2"
+        # JPEG viewers only ever get the newest frame.
+        jpeg = relay.frames("jpeg")
+        waiting = asyncio.ensure_future(anext(jpeg))
+        await asyncio.sleep(0)
+        relay._publish_jpeg(b"one")
+        assert await waiting == b"one"
+        relay._publish_jpeg(b"two")
+        relay._publish_jpeg(b"three")
+        assert await anext(jpeg) == b"three"
+
+    asyncio.run(scenario())
+
+
+def test_jpeg_transcoder_decodes_h264_from_a_keyframe():
+    try:
+        encoder = av.CodecContext.create("libx264", "w")
+    except Exception:
+        pytest.skip("this PyAV build has no H.264 encoder to make test video with")
+    encoder.width, encoder.height, encoder.pix_fmt, encoder.time_base = 640, 360, "yuv420p", Fraction(1, 15)
+    encoder.options = {"tune": "zerolatency"}
+    packets = []
+    for pts in range(5):
+        frame = av.VideoFrame(640, 360, "yuv420p")
+        frame.pts = pts
+        packets += [bytes(packet) for packet in encoder.encode(frame)]
+    assert starts_with_keyframe(packets[0]) and not starts_with_keyframe(packets[1])
+    jpeg = _JpegTranscoder().feed(packets)
+    assert jpeg[:2] == b"\xff\xd8" and jpeg[-2:] == b"\xff\xd9"
+
+
+class FakeCameraRelays:
+    """Stands in for the WebRTC side: two frames, then the camera stops."""
+
+    def __init__(self):
+        self.watched = []
+        self.formats = []
+
+    @asynccontextmanager
+    async def watch(self, http, printer_id, signaling_url):
+        self.watched.append((printer_id, signaling_url))
+        yield self
+
+    async def frames(self, fmt):
+        self.formats.append(fmt)
+        yield b"\xff\xd8 one"
+        yield b"\xff\xd8 two"
+        raise CameraError("Camera stopped sending video.")
+
+    async def close(self):
+        pass
+
+
+def test_camera_stream_sends_frames_then_the_reason_it_stopped(open_client):
+    relays = open_client.app.state.cameras = FakeCameraRelays()
+    with open_client.websocket_connect("/ws/camera/k1c") as ws:
+        assert ws.receive_bytes() == b"\xff\xd8 one"
+        assert ws.receive_bytes() == b"\xff\xd8 two"
+        with pytest.raises(WebSocketDisconnect) as closed:
+            ws.receive_bytes()
+    assert closed.value.code == 1011 and closed.value.reason == "Camera stopped sending video."
+    assert relays.watched == [("k1c", "http://192.168.1.50:8000/call/webrtc_local")]
+    # The format is the viewer's choice; anything unrecognised gets JPEG.
+    for query in ("?format=h264", "?format=bogus"):
+        with open_client.websocket_connect("/ws/camera/k1c" + query) as ws:
+            ws.receive_bytes()
+    assert relays.formats == ["jpeg", "h264", "jpeg"]
+    relays.watched.clear()
+    # Unknown printer, or one with no camera: refused before any relay starts.
     open_client.patch("/api/printers/k1c", json={"camera_url": ""})
-    assert open_client.post("/api/printers/k1c/camera/offer", json={"sdp": "x"}).status_code == 404
+    for printer_id in ("nope", "k1c"):
+        with pytest.raises(WebSocketDisconnect):
+            with open_client.websocket_connect(f"/ws/camera/{printer_id}"):
+                pass
+    assert relays.watched == []
 
 
 # --- jobs + history --------------------------------------------------------
